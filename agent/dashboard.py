@@ -976,23 +976,13 @@ async function setApiKey() {
   }
 }
 
-// Check on page load if API key is already set and get uploaded filename
-Promise.all([
-  fetch('/status').then(r => r.json()),
-  fetch('/api/config').then(r => r.json()).catch(() => ({uploaded_filename: 'resume.pdf'}))
-]).then(([status, config]) => {
+// Check on page load if API key is already set (don't pre-load uploaded CV)
+fetch('/status').then(r => r.json()).then(status => {
   if (status.api_key_configured) {
     apiKeyStatus.textContent = '✅ Configured';
     apiKeyStatus.className = 'api-key-status configured';
     apiKeyInput.disabled = true;
     document.getElementById('apiKeyBtn').disabled = true;
-  }
-  // Show the actual uploaded filename if it exists
-  if (config.uploaded_filename) {
-    fileName.textContent = config.uploaded_filename;
-    uploadZone.classList.add('has-file');
-    uploadedFile = true;  // Mark as having a file so Run button can be enabled
-    if (apiKeyInput.disabled) runBtn.disabled = false;
   }
 });
 
