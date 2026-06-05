@@ -1023,7 +1023,7 @@ def create_dashboard_app(config: AppConfig):
       <span class="terminal-dot red"></span>
       <span class="terminal-dot yellow"></span>
       <span class="terminal-dot green"></span>
-      <span class="terminal-title">Agent Console</span>
+      <span class="terminal-title" id="terminalTitle">Agent Console</span>
     </div>
     <div class="terminal-body" id="terminalBody">
       <span class="terminal-cursor"></span>
@@ -1296,6 +1296,9 @@ runBtn.addEventListener('click', () => {
     dotCount = (dotCount + 1) % 4;
     btnText.textContent = '⟳ RUNNING' + '.'.repeat(dotCount);
   }, 500);
+  // Update terminal header with selected region
+  const regionLabel = regionStatus.textContent || '🌐 Remote';
+  document.getElementById('terminalTitle').textContent = 'Agent Console — ' + regionLabel;
   terminalSection.classList.add('active');
   resultsSection.classList.remove('active');
   terminalBody.innerHTML = '';
