@@ -31,6 +31,7 @@ _run_returncode: Optional[int] = None
 _gui_api_key: str = ""  # API key entered via the browser GUI
 _uploaded_filename: str = "resume.pdf"  # Actual uploaded CV filename
 _dashboard_data_dir: str = "."  # Configurable data directory
+_selected_region: str = "Remote"  # Country/region selected by user
 
 # ── Applied Jobs Tracking ─────────────────────────────────────────────────────
 
@@ -80,6 +81,8 @@ def _run_agent_in_thread(cwd: str, api_key: str = ""):
         return
     # Ensure the subprocess has the key
     env["ANTHROPIC_API_KEY"] = api_key
+    # Pass the selected region to the agent
+    env["AGENT_LOCATION"] = _selected_region
 
     cmd = [sys.executable, "-m", "agent", "run", "--headless"]
 
@@ -400,6 +403,72 @@ def create_dashboard_app(config: AppConfig):
     box-shadow: 0 0 30px rgba(0,255,65,0.3), inset 0 0 20px rgba(0,255,65,0.1);
     transform: translateY(-2px);
   }
+  /* ── Region Selector ── */
+  .region-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 24px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .region-label {
+    color: var(--accent);
+    font-size: 0.9em;
+    letter-spacing: 1px;
+    white-space: nowrap;
+  }
+  .region-select {
+    flex: 1;
+    min-width: 220px;
+    padding: 10px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.85em;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2300ff41' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 36px;
+  }
+  .region-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(0,255,255,0.15);
+  }
+  .region-select:hover {
+    border-color: var(--primary);
+  }
+  .region-select option {
+    background: var(--surface2);
+    color: var(--text);
+    padding: 8px;
+  }
+  .region-select optgroup {
+    background: var(--surface);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 0.9em;
+  }
+  .region-status {
+    font-size: 0.85em;
+    color: var(--primary);
+    white-space: nowrap;
+    padding: 4px 12px;
+    background: rgba(0,255,65,0.06);
+    border: 1px solid rgba(0,255,65,0.2);
+    border-radius: 4px;
+  }
+
   .run-btn:disabled {
     border-color: var(--text-dim);
     color: var(--text-dim);
@@ -868,6 +937,75 @@ def create_dashboard_app(config: AppConfig):
     <input type="file" id="fileInput" accept=".pdf">
   </div>
 
+  <!-- Region Selector -->
+  <div class="region-section">
+    <label class="region-label">🌍 Region:</label>
+    <select class="region-select" id="regionSelect" onchange="setRegion(this.value)">
+      <optgroup label="🌐 Remote">
+        <option value="Remote" selected>Remote (Worldwide)</option>
+      </optgroup>
+      <optgroup label="🇪🇺 Western Europe">
+        <option value="Austria">Austria</option>
+        <option value="Belgium">Belgium</option>
+        <option value="France">France</option>
+        <option value="Germany">Germany</option>
+        <option value="Ireland">Ireland</option>
+        <option value="Luxembourg">Luxembourg</option>
+        <option value="Monaco">Monaco</option>
+        <option value="Netherlands">Netherlands</option>
+        <option value="Switzerland">Switzerland</option>
+        <option value="United Kingdom">United Kingdom</option>
+      </optgroup>
+      <optgroup label="🇪🇺 Northern Europe">
+        <option value="Denmark">Denmark</option>
+        <option value="Estonia">Estonia</option>
+        <option value="Finland">Finland</option>
+        <option value="Iceland">Iceland</option>
+        <option value="Latvia">Latvia</option>
+        <option value="Lithuania">Lithuania</option>
+        <option value="Norway">Norway</option>
+        <option value="Sweden">Sweden</option>
+      </optgroup>
+      <optgroup label="🇪🇺 Southern Europe">
+        <option value="Croatia">Croatia</option>
+        <option value="Cyprus">Cyprus</option>
+        <option value="Greece">Greece</option>
+        <option value="Italy">Italy</option>
+        <option value="Malta">Malta</option>
+        <option value="Portugal">Portugal</option>
+        <option value="Spain">Spain</option>
+      </optgroup>
+      <optgroup label="🇪🇺 Central &amp; Eastern Europe">
+        <option value="Bulgaria">Bulgaria</option>
+        <option value="Czech Republic">Czech Republic</option>
+        <option value="Hungary">Hungary</option>
+        <option value="Poland">Poland</option>
+        <option value="Romania">Romania</option>
+        <option value="Slovakia">Slovakia</option>
+        <option value="Slovenia">Slovenia</option>
+      </optgroup>
+      <optgroup label="🌍 North America">
+        <option value="Canada">Canada</option>
+        <option value="Mexico">Mexico</option>
+        <option value="United States">United States</option>
+      </optgroup>
+      <optgroup label="🌏 Asia &amp; Pacific">
+        <option value="Australia">Australia</option>
+        <option value="India">India</option>
+        <option value="Japan">Japan</option>
+        <option value="New Zealand">New Zealand</option>
+        <option value="Singapore">Singapore</option>
+        <option value="South Korea">South Korea</option>
+      </optgroup>
+      <optgroup label="🌍 Other">
+        <option value="Brazil">Brazil</option>
+        <option value="South Africa">South Africa</option>
+        <option value="UAE">UAE</option>
+      </optgroup>
+    </select>
+    <span class="region-status" id="regionStatus">🌐 Remote</span>
+  </div>
+
   <!-- Run / Stop Buttons -->
   <div class="run-section">
     <button class="run-btn" id="runBtn" disabled>
@@ -1027,6 +1165,27 @@ async function setApiKey() {
   } catch (err) {
     apiKeyStatus.textContent = '⚠️ Error: ' + err.message;
     apiKeyStatus.className = 'api-key-status missing';
+  }
+}
+
+// ── Region Selector ──
+const regionSelect = document.getElementById('regionSelect');
+const regionStatus = document.getElementById('regionStatus');
+
+async function setRegion(value) {
+  if (!value) return;
+  try {
+    const resp = await fetch('/set-region', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ region: value })
+    });
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      regionStatus.textContent = '🌐 ' + data.region;
+    }
+  } catch (err) {
+    console.error('Failed to set region:', err);
   }
 }
 
@@ -1508,6 +1667,19 @@ function escHtml(str) {
 
         logger.info("Agent stopped by user")
         return jsonify({'status': 'ok'})
+
+    @app.route('/set-region', methods=['POST'])
+    def set_region():
+        global _selected_region
+        data = request.get_json()
+        if not data or 'region' not in data:
+            return jsonify({'status': 'error', 'error': 'No region provided'}), 400
+        region = data['region'].strip()
+        if not region:
+            return jsonify({'status': 'error', 'error': 'Empty region'}), 400
+        _selected_region = region
+        logger.info(f"Region set to: {region}")
+        return jsonify({'status': 'ok', 'region': region})
 
     @app.route('/set-api-key', methods=['POST'])
     def set_api_key():

@@ -94,7 +94,8 @@ async def run_search(profile: dict, context, limit: int = 0):
     Creates one browser page per platform and runs scrapers concurrently.
     """
     queries = profile.get("target_roles", ["software engineer"])
-    location = profile.get("preferred_location", "Remote")
+    # Use AGENT_LOCATION env var if set (from dashboard region selector), otherwise profile location
+    location = os.environ.get("AGENT_LOCATION", "") or profile.get("preferred_location", "Remote")
 
     all_jobs = []
 
