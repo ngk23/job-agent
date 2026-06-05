@@ -941,8 +941,9 @@ def create_dashboard_app(config: AppConfig):
   <div class="region-section">
     <label class="region-label">🌍 Region:</label>
     <select class="region-select" id="regionSelect" onchange="setRegion(this.value)">
-      <optgroup label="🌐 Remote">
-        <option value="Remote" selected>Remote (Worldwide)</option>
+      <optgroup label="🌐 Broad Regions">
+        <option value="Remote" selected>🌍 Remote (Worldwide)</option>
+        <option value="Europe">🇪🇺 All Europe</option>
       </optgroup>
       <optgroup label="🇪🇺 Western Europe">
         <option value="Austria">Austria</option>
