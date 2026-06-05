@@ -362,6 +362,11 @@ def create_dashboard_app(config: AppConfig):
   .run-section {
     text-align: center;
     margin-bottom: 24px;
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
   }
   .run-btn {
     font-family: 'Share Tech Mono', monospace;
@@ -409,6 +414,31 @@ def create_dashboard_app(config: AppConfig):
     50% { box-shadow: 0 0 40px rgba(0,255,65,0.6), 0 0 60px rgba(0,255,65,0.2); }
   }
   .run-btn .btn-text { display: inline; }
+
+  /* ── Stop Button ── */
+  .stop-btn {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1em;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 16px 36px;
+    border: 2px solid var(--error);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--error);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+    display: none;
+  }
+  .stop-btn.visible { display: inline-block; }
+  .stop-btn:hover {
+    background: rgba(255,51,85,0.12);
+    box-shadow: 0 0 25px rgba(255,51,85,0.3), inset 0 0 15px rgba(255,51,85,0.08);
+    transform: translateY(-2px);
+  }
 
   /* ── Terminal Output ── */
   .terminal-section {
@@ -820,10 +850,13 @@ def create_dashboard_app(config: AppConfig):
     <input type="file" id="fileInput" accept=".pdf">
   </div>
 
-  <!-- Run Button -->
+  <!-- Run / Stop Buttons -->
   <div class="run-section">
     <button class="run-btn" id="runBtn" disabled>
       <span class="btn-text">▶ RUN AGENT</span>
+    </button>
+    <button class="stop-btn" id="stopBtn" onclick="stopAgent()">
+      ■ STOP
     </button>
   </div>
 
@@ -1048,11 +1081,22 @@ const resultsGrid = document.getElementById('resultsGrid');
 const resultFiles = document.getElementById('resultFiles');
 let eventSource = null;
 
+const stopBtn = document.getElementById('stopBtn');
+
+async function stopAgent() {
+  try {
+    await fetch('/stop', { method: 'POST' });
+  } catch (err) {
+    console.error('Stop failed:', err);
+  }
+}
+
 runBtn.addEventListener('click', () => {
   if (eventSource) return;
 
   runBtn.disabled = true;
   runBtn.classList.add('running');
+  stopBtn.classList.add('visible');
   const btnText = runBtn.querySelector('.btn-text');
   // Animate button dots with JS (CSS cannot animate content)
   let dotCount = 0;
@@ -1078,6 +1122,7 @@ runBtn.addEventListener('click', () => {
     eventSource = null;
     clearInterval(dotTimer);
     runBtn.classList.remove('running');
+    stopBtn.classList.remove('visible');
     runBtn.querySelector('.btn-text').textContent = '▶ RUN AGAIN';
     runBtn.disabled = !uploadedFile;
     fetchResults();
@@ -1399,6 +1444,35 @@ function escHtml(str) {
 
         logger.info(f"CV '{_uploaded_filename}' uploaded and saved to {save_path}")
         return jsonify({'status': 'ok', 'filename': _uploaded_filename})
+
+    @app.route('/stop', methods=['POST'])
+    def stop_agent():
+        """Stop the running agent subprocess."""
+        global _run_process, _run_thread, _run_complete, _output_queue
+
+        if _run_process is not None:
+            try:
+                # Try graceful termination first
+                _run_process.terminate()
+                # Give it 3 seconds to stop gracefully
+                _run_process.wait(timeout=3)
+            except Exception:
+                try:
+                    # Force kill if terminate didn't work
+                    _run_process.kill()
+                    _run_process.wait(timeout=2)
+                except Exception:
+                    pass
+
+        _run_complete = True
+        _run_process = None
+        _run_thread = None
+
+        if _output_queue is not None:
+            _output_queue.put("[SYSTEM] Agent stopped by user.\n")
+
+        logger.info("Agent stopped by user")
+        return jsonify({'status': 'ok'})
 
     @app.route('/set-api-key', methods=['POST'])
     def set_api_key():
