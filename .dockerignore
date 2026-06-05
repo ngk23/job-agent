@@ -26,5 +26,8 @@ Thumbs.db
 # GitHub (keep CI workflow for reference)
 .github/
 
+# But keep the README (HF Space uses it as landing page)
+!README.md
+
 # Large generated files (keep logs/ and resume.pdf for deployment)
 *.docx
