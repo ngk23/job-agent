@@ -26,6 +26,7 @@ _output_queue: Optional[queue.Queue] = None
 _run_process: Optional[subprocess.Popen] = None
 _run_thread: Optional[threading.Thread] = None
 _run_complete = False
+_stop_requested = False
 _run_returncode: Optional[int] = None
 _gui_api_key: str = ""  # API key entered via the browser GUI
 _uploaded_filename: str = "resume.pdf"  # Actual uploaded CV filename
@@ -66,7 +67,7 @@ def _mark_applied(job_url: str) -> bool:
 
 def _run_agent_in_thread(cwd: str, api_key: str = ""):
     """Run the agent as a subprocess and push output lines to a queue."""
-    global _output_queue, _run_process, _run_complete, _run_returncode
+    global _output_queue, _run_process, _run_complete, _run_returncode, _stop_requested
 
     env = os.environ.copy()
     # Use the API key from the config (passed from the dashboard app)
@@ -104,7 +105,8 @@ def _run_agent_in_thread(cwd: str, api_key: str = ""):
         process.wait()
         _run_returncode = process.returncode
 
-        _output_queue.put(f"\n[SYSTEM] Agent finished with exit code {process.returncode}\n")
+        if not _stop_requested:
+            _output_queue.put(f"\n[SYSTEM] Agent finished with exit code {process.returncode}\n")
         _run_complete = True
 
     except Exception as e:
@@ -1448,7 +1450,9 @@ function escHtml(str) {
     @app.route('/stop', methods=['POST'])
     def stop_agent():
         """Stop the running agent subprocess."""
-        global _run_process, _run_thread, _run_complete, _output_queue
+        global _run_process, _run_thread, _run_complete, _output_queue, _stop_requested
+
+        _stop_requested = True
 
         if _run_process is not None:
             try:
@@ -1463,10 +1467,6 @@ function escHtml(str) {
                     _run_process.wait(timeout=2)
                 except Exception:
                     pass
-
-        _run_complete = True
-        _run_process = None
-        _run_thread = None
 
         if _output_queue is not None:
             _output_queue.put("[SYSTEM] Agent stopped by user.\n")
@@ -1505,7 +1505,7 @@ function escHtml(str) {
         work_dir = str(project_root)
 
         def generate():
-            global _run_complete
+            global _run_complete, _stop_requested
             # Push initial status
             yield f"data: [SYSTEM] Starting agent with CV: {_uploaded_filename}\n\n"
             yield f"data: [SYSTEM] Analyzing resume, generating search keywords...\n\n"
@@ -1536,7 +1536,10 @@ function escHtml(str) {
                                 yield f"data: {safe_line}\n\n"
                         except queue.Empty:
                             pass
-                        yield "data: [SYSTEM] Agent completed.\n\n"
+                        if _stop_requested:
+                            yield "data: [SYSTEM] Agent stopped.\n\n"
+                        else:
+                            yield "data: [SYSTEM] Agent completed.\n\n"
                         break
                     else:
                         # Keep-alive
