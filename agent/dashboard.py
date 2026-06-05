@@ -1296,9 +1296,10 @@ runBtn.addEventListener('click', () => {
     dotCount = (dotCount + 1) % 4;
     btnText.textContent = '⟳ RUNNING' + '.'.repeat(dotCount);
   }, 500);
-  // Update terminal header with selected region
+  // Update terminal header with selected region and CV filename
   const regionLabel = regionStatus.textContent || '🌐 Remote';
-  document.getElementById('terminalTitle').textContent = 'Agent Console — ' + regionLabel;
+  const cvLabel = fileName.textContent || 'resume.pdf';
+  document.getElementById('terminalTitle').textContent = 'Agent Console — ' + regionLabel + ' | CV: ' + cvLabel;
   terminalSection.classList.add('active');
   resultsSection.classList.remove('active');
   terminalBody.innerHTML = '';
