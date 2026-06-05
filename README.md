@@ -1,4 +1,14 @@
-# 🤖 Job Agent — AI Job Search & CV Generator
+---
+title: Job Agent
+emoji: 🤖
+colorFrom: green
+colorTo: blue
+sdk: docker
+pinned: false
+license: mit
+---
+
+# Job Agent — AI Job Search & CV Generator
 
 An AI-powered agent that searches **LinkedIn, Indeed, Glassdoor, and Monster** — scores each job with **Claude AI** — generates tailored CVs — and exports everything.
 
