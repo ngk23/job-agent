@@ -584,8 +584,11 @@ def main():
         if args.resume:
             config.resume_path = args.resume
     elif args.command == "dashboard":
-        config.dashboard_port = args.port
-        config.dashboard_host = args.host
+        # On HF Spaces, host/port are auto-detected (0.0.0.0:7860)
+        # Only apply argparse overrides when running locally
+        if not config.is_hf_space:
+            config.dashboard_port = args.port
+            config.dashboard_host = args.host
 
     if not args.command:
         parser.print_help()

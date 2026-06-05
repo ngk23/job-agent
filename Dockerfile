@@ -44,8 +44,15 @@ RUN mkdir -p logs/sessions profiles
 RUN mkdir -p /data/logs/sessions /data/profiles
 
 # Copy initial data to /data BEFORE creating symlinks
-RUN cp profiles/profile.json /data/profiles/profile.json && \
+RUN mkdir -p /data/logs/sessions /data/profiles && \
+    cp profiles/profile.json /data/profiles/profile.json 2>/dev/null; \
     cp -r logs/* /data/logs/ 2>/dev/null || true
+
+# Save defaults to a NON-symlinked location for runtime init
+# (When HF Spaces mounts the /data persistent volume, symlink targets are empty)
+RUN mkdir -p /app/.default && \
+    cp profiles/profile.json /app/.default/profile.json 2>/dev/null; \
+    test -f resume.pdf && cp resume.pdf /app/.default/resume.pdf 2>/dev/null || true
 
 # Replace local dirs with symlinks to persistent /data
 RUN rm -rf logs profiles && \

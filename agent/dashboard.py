@@ -1377,6 +1377,11 @@ function escHtml(str) {
     def index():
         return render_template_string(GUI_HTML)
 
+    @app.route('/healthz')
+    def healthz():
+        """Health check endpoint for HF Spaces."""
+        return jsonify({'status': 'ok'})
+
     @app.route('/upload', methods=['POST'])
     def upload_file():
         global _run_complete
@@ -1568,6 +1573,10 @@ function escHtml(str) {
 def _init_persistent_data(config: AppConfig):
     """Initialize persistent data directory with initial files from project.
     On Hugging Face Spaces, copies profiles/ and other data to /data.
+    
+    Note: On HF Spaces, /profiles and /resume.pdf are symlinked to /data/,
+    so reading them through project_root resolves to the (empty) persistent volume.
+    We use a non-symlinked backup copy at /app/.default/ as fallback.
     """
     if not config.is_hf_space:
         return
@@ -1579,37 +1588,40 @@ def _init_persistent_data(config: AppConfig):
     for subdir in ['logs', 'logs/sessions', 'profiles']:
         (data_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-    # Copy profile template if not already in /data
-    src_profile = project_root / 'profiles' / 'profile.json'
-    dst_profile = data_dir / 'profiles' / 'profile.json'
-    if src_profile.exists() and not dst_profile.exists():
-        import shutil
-        shutil.copy2(str(src_profile), str(dst_profile))
-        logger.info(f"Copied profile template to {dst_profile}")
+    import shutil
+
+    # Helper: try symlinked path first, then fallback to non-symlinked backup
+    def _copy_with_fallback(src_rel: str, dst_rel: str, backup_rel: str = None):
+        src = project_root / src_rel
+        dst = data_dir / dst_rel
+        if dst.exists():
+            return  # Already initialized
+        if src.exists():
+            # Source is available (e.g. symlink target exists from previous run)
+            shutil.copy2(str(src), str(dst))
+            logger.info(f"Copied {src_rel} to {dst}")
+        elif backup_rel:
+            # Try non-symlinked fallback (Dockerfile copies to /app/.default/)
+            backup = project_root / backup_rel
+            if backup.exists():
+                shutil.copy2(str(backup), str(dst))
+                logger.info(f"Copied {backup_rel} (fallback) to {dst}")
+            else:
+                logger.warning(f"Neither {src_rel} nor {backup_rel} found - skipping")
+        else:
+            logger.warning(f"{src_rel} not found - skipping")
+
+    # Copy profile template
+    _copy_with_fallback('profiles/profile.json', 'profiles/profile.json', '.default/profile.json')
 
     # Copy existing resume.pdf if present
-    src_resume = project_root / 'resume.pdf'
-    dst_resume = data_dir / 'resume.pdf'
-    if src_resume.exists() and not dst_resume.exists():
-        import shutil
-        shutil.copy2(str(src_resume), str(dst_resume))
-        logger.info(f"Copied resume to {dst_resume}")
+    _copy_with_fallback('resume.pdf', 'resume.pdf', '.default/resume.pdf')
 
     # Copy existing applications history if present
-    src_apps = project_root / 'logs' / 'applications.json'
-    dst_apps = data_dir / 'logs' / 'applications.json'
-    if src_apps.exists() and not dst_apps.exists():
-        import shutil
-        shutil.copy2(str(src_apps), str(dst_apps))
-        logger.info(f"Copied applications history to {dst_apps}")
+    _copy_with_fallback('logs/applications.json', 'logs/applications.json')
 
     # Copy applied.json if present
-    src_applied = project_root / 'logs' / 'applied.json'
-    dst_applied = data_dir / 'logs' / 'applied.json'
-    if src_applied.exists() and not dst_applied.exists():
-        import shutil
-        shutil.copy2(str(src_applied), str(dst_applied))
-        logger.info(f"Copied applied history to {dst_applied}")
+    _copy_with_fallback('logs/applied.json', 'logs/applied.json')
 
     logger.info(f"Persistent data initialized at {data_dir}")
 
