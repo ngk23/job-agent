@@ -1426,9 +1426,9 @@ function escHtml(str) {
         _output_queue = queue.Queue()
         _run_complete = False
 
-        # Use data_dir as the working directory for the subprocess
-        project_root = Path(__file__).resolve().parent.parent
-        work_dir = str(Path(config.data_dir).resolve())
+        # Use the project root as the working directory so Python can find the agent module
+        project_root = Path(__file__).resolve().parent.parent  # /app
+        work_dir = str(project_root)
 
         def generate():
             global _run_complete
