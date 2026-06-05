@@ -803,6 +803,22 @@ def create_dashboard_app(config: AppConfig):
     color: var(--accent);
     font-weight: 700;
   }
+  .clear-history-btn {
+    padding: 4px 12px;
+    background: transparent;
+    border: 1px solid var(--warning);
+    border-radius: 4px;
+    color: var(--warning);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.72em;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .clear-history-btn:hover {
+    background: rgba(255,170,0,0.12);
+    box-shadow: 0 0 10px rgba(255,170,0,0.2);
+  }
   .filter-spacer {
     width: 1px;
     height: 20px;
@@ -932,8 +948,11 @@ def create_dashboard_app(config: AppConfig):
           <option value="full">Full Desc</option>
           <option value="title">Title Only</option>
         </select>
-      </div>
-      <span class="filter-count" id="filterCount"></span>
+      </div>          <span class="filter-count" id="filterCount"></span>
+          <div class="filter-spacer"></div>
+          <button class="clear-history-btn" id="clearHistoryBtn" onclick="clearHistory()">
+            🗑 CLEAR
+          </button>
     </div>
     <div id="historyContent">
       <div class="history-loading">Loading history...</div>
@@ -1398,6 +1417,22 @@ async function applyToJob(url, btn) {
   }
 }
 
+async function clearHistory() {
+  if (!confirm('Clear all scoring history and applied jobs?')) return;
+  try {
+    const resp = await fetch('/api/clear-history', { method: 'POST' });
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      _allHistoryJobs = [];
+      _appliedSet = new Set();
+      historyContent.innerHTML = '<div class="history-empty">History cleared. Run the agent to generate new results!</div>';
+      document.getElementById('historyFilters').style.display = 'none';
+    }
+  } catch (err) {
+    alert('Failed to clear history: ' + err.message);
+  }
+}
+
 function escHtml(str) {
   const div = document.createElement('div');
   div.textContent = str || '';
@@ -1580,6 +1615,17 @@ function escHtml(str) {
             'stats': stats,
             'run_complete': _run_complete,
         })
+
+    @app.route('/api/clear-history', methods=['POST'])
+    def clear_history():
+        """Clear all scoring history."""
+        tracker.clear()
+        # Also clear applied jobs tracking
+        applied_path = _applied_path()
+        if applied_path.exists():
+            applied_path.unlink()
+        logger.info("Scoring history and applied jobs cleared by user")
+        return jsonify({'status': 'ok'})
 
     @app.route('/api/applied', methods=['GET'])
     def get_applied():
