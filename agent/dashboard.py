@@ -1197,6 +1197,17 @@ fetch('/status').then(r => r.json()).then(status => {
     apiKeyInput.disabled = true;
     document.getElementById('apiKeyBtn').disabled = true;
   }
+  // Restore previously selected region
+  if (status.selected_region) {
+    const options = regionSelect.querySelectorAll('option');
+    for (const opt of options) {
+      if (opt.value === status.selected_region) {
+        opt.selected = true;
+        regionStatus.textContent = '🌐 ' + status.selected_region;
+        break;
+      }
+    }
+  }
 });
 
 // ── Upload ──
@@ -1843,6 +1854,7 @@ function escHtml(str) {
         s = _agent_status()
         s['api_key_configured'] = bool(_gui_api_key or config.anthropic_api_key)
         s['uploaded_filename'] = _uploaded_filename
+        s['selected_region'] = _selected_region
         return jsonify(s)
 
     @app.route('/api/config')
