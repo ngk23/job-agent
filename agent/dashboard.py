@@ -1499,6 +1499,7 @@ function escHtml(str) {
         # Reset state
         _output_queue = queue.Queue()
         _run_complete = False
+        _stop_requested = False
 
         # Use the project root as the working directory so Python can find the agent module
         project_root = Path(__file__).resolve().parent.parent  # /app
