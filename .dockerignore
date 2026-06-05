@@ -1,0 +1,30 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_NAME
+Thumbs.db
+
+# GitHub (keep CI workflow for reference)
+.github/
+
+# Large generated files (keep logs/ and resume.pdf for deployment)
+*.docx

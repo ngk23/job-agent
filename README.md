@@ -1,0 +1,161 @@
+# 🤖 Job Agent — AI Job Search & CV Generator
+
+An AI-powered agent that searches **LinkedIn, Indeed, Glassdoor, and Monster** — scores each job with **Claude AI** — generates tailored CVs — and exports everything.
+
+Upload **any CV** (any background, any person) and the agent automatically extracts your profile, searches for matching jobs, scores them, and generates cover letters.
+
+---
+
+## 🚀 Deploy on Hugging Face Spaces (Free, 24/7)
+
+Easiest way to access the dashboard from **any device** (phone, tablet, laptop):
+
+### 1-Click Deploy
+
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/new-space?docker=python&template=docker)
+
+1. Click the badge above → **Create a new Space**
+2. Set **Space name** (e.g., `job-agent`)  
+3. **Space SDK**: Select **Docker**  
+4. **Docker Template**: Select **Python**  
+5. Click **Create Space**
+
+### Push your code to the Space
+
+```bash
+# Clone your Space
+git clone https://huggingface.co/spaces/YOUR_USERNAME/job-agent
+cd job-agent
+
+# Copy all files from this project
+# (copy Dockerfile, agent/, profiles/, requirements.txt, etc.)
+
+# Push
+git add .
+git commit -m "Initial deploy"
+git push
+```
+
+### Set your API Key
+
+In your Space's **Settings → Repository Secrets**:
+- `ANTHROPIC_API_KEY` → Your Claude API key (get one at https://console.anthropic.com)
+
+### That's it!
+
+Your Space will build and start. Open the **App** tab to see the dashboard.  
+Upload any CV and click **Run Agent** — it works from any device.
+
+---
+
+## 🏠 Local Setup
+
+### 1. Install dependencies
+```bash
+pip install -r requirements.txt
+playwright install chromium
+```
+
+### 2. Set your Anthropic API key
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+Get one free at https://console.anthropic.com
+
+### 3. Run the dashboard
+```bash
+python -m agent dashboard
+```
+
+Open http://127.0.0.1:8080 in your browser.  
+Upload any CV and click **Run Agent**.
+
+---
+
+## 🎮 Usage
+
+### Web Dashboard (recommended)
+```bash
+python -m agent dashboard
+```
+- Upload any CV (PDF) — the agent auto-extracts your full profile
+- Set your API key in the browser
+- Click **Run Agent** — watch live terminal output
+- Download generated CVs and job listings
+- View scoring history with filters
+
+### Command Line (headless)
+```bash
+python -m agent run --headless
+```
+
+### Options
+```
+--headless      Run browser invisibly (default: False)
+--profile       Path to profile JSON (default: profiles/profile.json)
+--resume        Path to resume PDF (default: resume.pdf)
+--max-jobs      Max jobs to search per platform (0 = unlimited)
+```
+
+---
+
+## ✨ Features
+
+- **Auto-Profile Extraction** — Upload any CV; the agent reads it with AI and extracts name, skills, experience, education, and target roles automatically
+- **Multi-Platform Search** — LinkedIn, Indeed, Glassdoor, Monster
+- **AI Scoring** — Claude scores each job (0-100) and writes tailored cover letters
+- **Title-Only Scoring** — AI-related jobs without descriptions still get scored
+- **Custom Keywords** — Configurable AI keyword list in `profile.json`
+- **CV Generation** — Generates tailored CV PDFs for top matches
+- **Word Export** — Exports job listings to `.docx`
+- **Scoring History** — View past results with filters (score, platform, status, type)
+- **Mark as Applied** — Track which jobs you've applied to
+- **Any Background** — Works for AI Engineer, Data Analyst, Accountant, Designer — any CV
+
+---
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ANTHROPIC_API_KEY` | Your Claude API key | Required |
+| `DASHBOARD_HOST` | Web dashboard host | `127.0.0.1` (or `0.0.0.0` on HF Spaces) |
+| `DASHBOARD_PORT` | Web dashboard port | `8080` (or `7860` on HF Spaces) |
+| `HEADLESS` | Run browser invisibly | `false` |
+| `MIN_SCORE` | Minimum AI score for high match | `70` |
+| `MAX_JOB_SEARCH` | Max jobs per platform | `0` (unlimited) |
+
+---
+
+## Project Structure
+
+```
+job-agent/
+├── agent/
+│   ├── main.py          ← Main agent (run, dashboard commands)
+│   ├── ai.py            ← Claude integration (scoring, profile extraction)
+│   ├── config.py        ← Configuration management
+│   ├── dashboard.py     ← Web GUI (Flask)
+│   ├── scrapers.py      ← Browser-based job scrapers (Playwright)
+│   ├── tracker.py       ← Results tracking & history
+│   ├── models.py        ← Data models (Job, Platform)
+│   ├── utils.py         ← Resume parsing, utilities
+│   └── word_exporter.py ← DOCX export
+├── profiles/
+│   └── profile.json     ← Auto-filled from CV (was: manual profile)
+├── logs/
+│   ├── applications.json ← Scoring history
+│   └── sessions/        ← Saved browser sessions
+├── Dockerfile           ← For Hugging Face Spaces & Docker deployment
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## Notes
+
+- **LinkedIn** requires you to be logged in — open the dashboard browser, log into LinkedIn, then run the agent
+- **Playwright** is used for browser automation — installs Chromium automatically
+- **Rate limiting**: Adaptive delays between requests to avoid account bans
+- **All data stays local** (or on your HF Space) — no third-party servers
