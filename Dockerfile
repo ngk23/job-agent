@@ -1,7 +1,7 @@
 # Job Application Agent - Hugging Face Spaces Deployment
 # Uses: https://huggingface.co/new-space?docker=python
 
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # Install system dependencies for Playwright (browser automation)
 RUN apt-get update && apt-get install -y --no-install-recommends \
