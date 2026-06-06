@@ -524,25 +524,27 @@ async function handleLogin(e) {
 }
 
 // ── Hacking Animation ──
-const HACK_LINES = [
-  { text: '[INIT] Establishing secure connection...', cls: 'info', delay: 100 },
-  { text: '[OK]  Handshake complete (TLS 1.3, 4096-bit RSA)', cls: 'success', delay: 200 },
-  { text: '[INIT] Authenticating identity...', cls: 'info', delay: 150 },
-  { text: '[OK]  Token validated', cls: 'success', delay: 180 },
-  { text: '[INIT] Scanning mainframe access points...', cls: 'info', delay: 120 },
-  { text: '[!]   Detected firewall: SKYNET-ASM v4.2', cls: 'warning', delay: 200 },
-  { text: '[INIT] Deploying bypass payload...', cls: 'info', delay: 150 },
-  { text: '[OK]  IPS/IDS evasion successful', cls: 'success', delay: 250 },
-  { text: '[INIT] Cracking credential vault...', cls: 'info', delay: 180 },
-  { text: '[OK]  Decryption key obtained', cls: 'success', delay: 200 },
-  { text: '[INIT] Injecting session token...', cls: 'info', delay: 150 },
-  { text: '[OK]  Privilege escalation: ROOT', cls: 'success', delay: 250 },
-  { text: '[INIT] Masking trace route...', cls: 'info', delay: 120 },
-  { text: '[OK]  Proxy chain: ACTIVE (14 hops)', cls: 'success', delay: 200 },
-  { text: '[INIT] Synchronizing data streams...', cls: 'info', delay: 150 },
-  { text: '[OK]  All channels encrypted', cls: 'success', delay: 180 },
-  { text: '[SYS] Connection secured. Redirecting...', cls: 'highlight', delay: 300 },
-];
+function getHackLines(email) {
+  return [
+    { text: '[INIT] Establishing secure connection...', cls: 'info', delay: 100 },
+    { text: '[OK]  Handshake complete (TLS 1.3, 4096-bit RSA)', cls: 'success', delay: 200 },
+    { text: '[INIT] Locating target...', cls: 'info', delay: 150 },
+    { text: '[!]   Target identified: ' + email, cls: 'warning', delay: 250 },
+    { text: '[INIT] Scanning mainframe access points...', cls: 'info', delay: 120 },
+    { text: '[!]   Detected firewall: SKYNET-ASM v4.2', cls: 'warning', delay: 200 },
+    { text: '[INIT] Deploying bypass payload...', cls: 'info', delay: 150 },
+    { text: '[OK]  IPS/IDS evasion successful', cls: 'success', delay: 250 },
+    { text: '[INIT] Cracking credential vault...', cls: 'info', delay: 180 },
+    { text: '[OK]  Decryption key obtained', cls: 'success', delay: 200 },
+    { text: '[INIT] Injecting session token...', cls: 'info', delay: 150 },
+    { text: '[OK]  Privilege escalation: ROOT', cls: 'success', delay: 250 },
+    { text: '[INIT] Masking trace route...', cls: 'info', delay: 120 },
+    { text: '[OK]  Proxy chain: ACTIVE (14 hops)', cls: 'success', delay: 200 },
+    { text: '[INIT] Synchronizing data streams...', cls: 'info', delay: 150 },
+    { text: '[OK]  All channels encrypted', cls: 'success', delay: 180 },
+    { text: '[SYS] Connection secured. Redirecting...', cls: 'highlight', delay: 300 },
+  ];
+}
 
 async function showHackAnimation(email) {
   const overlay = document.getElementById('hackOverlay');
@@ -581,14 +583,15 @@ async function showHackAnimation(email) {
   const matrixInterval = setInterval(drawMatrix, 50);
   
   // Show lines with typing effect
-  for (let i = 0; i < HACK_LINES.length; i++) {
-    const line = HACK_LINES[i];
+  const lines = getHackLines(email);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const div = document.createElement('div');
     div.className = 'line ' + line.cls;
     div.textContent = line.text;
     output.appendChild(div);
     output.scrollTop = output.scrollHeight;
-    const progress = Math.round(((i + 1) / HACK_LINES.length) * 100);
+    const progress = Math.round(((i + 1) / lines.length) * 100);
     progressBar.style.width = progress + '%';
     await new Promise(r => setTimeout(r, line.delay));
   }
