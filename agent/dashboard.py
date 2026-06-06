@@ -3607,7 +3607,6 @@ async function handleReset(e) {
     <div class="sum-item"><span class="sum-num" id="feedbackRate">-</span> Positive Feedback</div>
   </div>
 
-  </div>
 
   <!-- Change Password Section -->
   <div class="section-title">🔑 Change Admin Password</div>
@@ -3631,10 +3630,10 @@ async function handleReset(e) {
   <div class="section-title">👥 All Users <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">({len(users)} total)</span></div>
   <table>
     <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th>Track</th><th>Actions</th></tr>
-    {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td><span class="badge badge-{"pending" if u.get("status")=="pending" else "user"}">{u.get("status","active")}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td><td><button class=\"btn-activity\" onclick=\"showUserActivity(' + str(u['id']) + ')\"">📋 Activity</button></td><td>{"<div class=\"btn-group\"><button class=\"btn-reset\" onclick=\"resetUserPassword(str(u["id"]))\"">🔑 Reset Pw</button><button class=\"btn-delete\" onclick=\"deleteUser(str(u["id"]))\"">🗑 Delete</button></div>"</td></tr>' for u in users)}
+    {{users_rows}}
   </table>
   
-  <  <div class="section-title"> Recent Activity <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(all users)</span></div>
+  <div class="section-title"> Recent Activity <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(all users)</span></div>
   <div id="recentActivityContainer" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:24px;">
     <div id="recentActivityContent" style="font-size:0.8em;color:var(--text-dim);text-align:center;padding:20px;">Loading activity...</div>
   </div>
@@ -3661,7 +3660,7 @@ async function resetUserPassword(userId) {{
   try {{
     const resp = await fetch('/admin/api/reset-user-password/' + userId, {{ method: 'POST' }});
     const data = await resp.json();
-    if (data.status === 'ok') {{ alert('Password reset'); }}
+    if (data.status === 'ok') {{ var msg = 'Password reset successful!'; if (data.new_password) msg += ' New password: ' + data.new_password; alert(msg); }}
     else {{ alert('Failed: ' + (data.error || 'Unknown error')); }}
   }} catch (err) {{ alert('Error: ' + err.message); }}
 }}
@@ -3735,7 +3734,28 @@ function escHtml(str) {{
         else:
             pending_section = '<div class="section-title">⏳ Pending Approval <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(none)</span></div><div class="empty">No pending users. All accounts have been processed.</div>'
         
+        # Build users table rows
+        users_rows_list = []
+        for u in users:
+            role_class = "admin" if u["role"] == "admin" else "user"
+            status_class = "pending" if u.get("status") == "pending" else "user"
+            status_text = u.get("status", "active")
+            created = u.get("created_at", "")[:10] if u.get("created_at") else ""
+            uid = u["id"]
+            users_rows_list.append(
+                f'<tr><td>{uid}</td><td>{u["name"]}</td><td>{u["email"]}</td>'
+                f'<td><span class="badge badge-{role_class}">{u["role"]}</span></td>'
+                f'<td><span class="badge badge-{status_class}">{status_text}</span></td>'
+                f'<td>{created}</td>'
+                f'<td><button class="btn-activity" onclick=\"showUserActivity({uid})\">📋 Activity</button></td>'
+                f'<td><div class="btn-group">'
+                f'<button class="btn-reset" onclick=\"resetUserPassword({uid})\">🔑 Reset Pw</button>'
+                f'<button class="btn-delete" onclick=\"deleteUser({uid})\">🗑 Delete</button>'
+                f'</div></td></tr>'
+            )
+        users_rows_str = "".join(users_rows_list)
         html = html.replace('{{pending_section}}', pending_section)
+        html = html.replace('{{users_rows}}', users_rows_str)
         return render_template_string(html)
 
     @app.route('/admin/api/stats')
@@ -3815,6 +3835,14 @@ function escHtml(str) {{
     @require_admin
     def admin_user_activity_all():
         return jsonify({'activity': get_all_recent_activity(limit=100)})
+
+    @app.route('/admin/api/user-activity/<int:target_user_id>')
+    @require_admin
+    def admin_user_activity(target_user_id):
+        """Get activity log for a specific user."""
+        from .database import get_user_activity
+        activity = get_user_activity(target_user_id, limit=50)
+        return jsonify({'activity': activity})
 
     @app.route('/admin/api/active-users')
     @require_admin
