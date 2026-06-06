@@ -94,7 +94,7 @@ def init_db():
     _migrate_add_column("users", "status", "TEXT DEFAULT 'active'")
 
     # Create password_reset_tokens table
-    conn.execute("""
+    conn.executescript("""
         CREATE TABLE IF NOT EXISTS password_reset_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
