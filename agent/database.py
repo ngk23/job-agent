@@ -195,9 +195,9 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
 
 
 def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
-    """Get user by email."""
+    """Get user by email (case-insensitive)."""
     conn = get_db()
-    row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    row = conn.execute("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", (email,)).fetchone()
     return dict(row) if row else None
 
 
