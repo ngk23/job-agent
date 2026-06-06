@@ -221,11 +221,20 @@ def update_user_api_key(user_id: int, api_key: str):
     conn.commit()
 
 
-def update_user_role(user_id: int, role: str):
-    """Update a user's role (admin only)."""
+def update_user_role(user_id: int, role: str) -> bool:
+    """Update a user's role (admin only). Returns True if successful."""
     conn = get_db()
-    conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+    cursor = conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
     conn.commit()
+    return cursor.rowcount > 0
+
+
+def update_user_status(user_id: int, status: str) -> bool:
+    """Update a user's account status (active/pending/rejected). Returns True if successful."""
+    conn = get_db()
+    cursor = conn.execute("UPDATE users SET status = ? WHERE id = ?", (status, user_id))
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def delete_user(user_id: int):

@@ -140,10 +140,12 @@ DEFAULT_ADMIN_NAME = "Gokul"
 def ensure_admin_exists():
     """Create the default admin user if no admin exists.
     Admin is created with status='active' so they can log in immediately.
-    Also migrates old admin email to the current default if needed.
+    Also:
+    - Migrates old admin email to the current default if needed.
+    - Ensures existing admin account is active with correct role.
     """
     init_db()
-    from .database import update_user_email
+    from .database import update_user_email, update_user_name, delete_user, update_user_role, update_user_status
     
     # Migration: check if old admin email exists and update it
     old_admin_emails = ["admin@jobagent.com"]
@@ -151,23 +153,32 @@ def ensure_admin_exists():
         if old_email.lower() != DEFAULT_ADMIN_EMAIL.lower():
             old_admin = get_user_by_email(old_email)
             if old_admin and old_admin.get("role") == "admin":
-                # Check if new email already taken
                 new_admin = get_user_by_email(DEFAULT_ADMIN_EMAIL)
                 if new_admin:
-                    # New email already exists - delete the old one
-                    from .database import delete_user
                     delete_user(old_admin["id"])
                     logger.info(f"Removed old admin account: {old_email}")
                 else:
-                    # Update the old admin's email to the new one
                     update_user_email(old_admin["id"], DEFAULT_ADMIN_EMAIL)
-                    if DEFAULT_ADMIN_NAME != old_admin.get("name"):
-                        from .database import update_user_name
-                        update_user_name(old_admin["id"], DEFAULT_ADMIN_NAME)
+                    update_user_name(old_admin["id"], DEFAULT_ADMIN_NAME)
                     logger.info(f"Migrated admin from {old_email} to {DEFAULT_ADMIN_EMAIL}")
     
+    # Check if the admin account exists but has wrong status/role
     admin = get_user_by_email(DEFAULT_ADMIN_EMAIL)
     if admin:
+        # Ensure admin is active and has correct role
+        if admin.get("role") != "admin":
+            update_user_role(admin["id"], "admin")
+            logger.info(f"Upgraded user {DEFAULT_ADMIN_EMAIL} to admin role")
+        if admin.get("status") != "active":
+            update_user_status(admin["id"], "active")
+            logger.info(f"Activated admin account: {DEFAULT_ADMIN_EMAIL}")
+        # Ensure password is correct (re-hash and update)
+        from werkzeug.security import check_password_hash
+        if not check_password_hash(admin["password_hash"], DEFAULT_ADMIN_PASSWORD):
+            from .database import update_user_password
+            new_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
+            update_user_password(admin["id"], new_hash)
+            logger.info(f"Reset admin password for {DEFAULT_ADMIN_EMAIL}")
         return
     
     pw_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
