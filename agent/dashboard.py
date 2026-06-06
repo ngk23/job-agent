@@ -3795,6 +3795,24 @@ async function handleReset(e) {
             return jsonify({'status': 'ok'})
         return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
 
+    @app.route('/admin/emergency-reset', methods=['GET'])
+    def emergency_admin_reset():
+        """Emergency endpoint: force-resets admin password to admin123.
+        Requires ?key=reset2024 to prevent abuse.
+        Only works for the hardcoded admin email.
+        """
+        key = request.args.get('key', '')
+        if key != 'reset2024':
+            return '<h1>Unauthorized</h1><p>Invalid key. Use ?key=reset2024</p>', 403
+        from .database import update_user_password, get_user_by_email
+        admin = get_user_by_email(DEFAULT_ADMIN_EMAIL)
+        if not admin:
+            return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1 style="color:#ff3355;">Admin Not Found</h1><p>No admin account exists.</p><a href="/login" style="color:#0ff;">Back to login</a></body></html>'
+        new_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
+        update_user_password(admin["id"], new_hash)
+        logger.info(f"EMERGENCY: Admin password reset for {DEFAULT_ADMIN_EMAIL}")
+        return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;text-align:center;"><h1 style="color:#00ff41;">Admin Password Reset</h1><p>The password has been reset to:</p><div style="color:#00ff41;font-size:1.2em;border:1px solid #00ff41;border-radius:4px;display:inline-block;padding:8px 16px;margin:12px 0;">admin123</div><p><a href="/login" style="color:#0ff;">Go to Login</a></p></body></html>'
+
     return app
 
 
