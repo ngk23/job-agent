@@ -183,11 +183,13 @@ def ensure_admin_exists():
         if admin.get("status") != "active":
             update_user_status(admin["id"], "active")
             logger.info(f"Activated admin account: {DEFAULT_ADMIN_EMAIL}")
-        # Always reset admin password to ensure it matches DEFAULT_ADMIN_PASSWORD
-        from .database import update_user_password
-        new_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
-        update_user_password(admin["id"], new_hash)
-        logger.info(f"Admin password synced to default for {DEFAULT_ADMIN_EMAIL}")
+        # Only reset admin password if it doesn't match the default
+        from werkzeug.security import check_password_hash
+        if not check_password_hash(admin["password_hash"], DEFAULT_ADMIN_PASSWORD):
+            from .database import update_user_password
+            new_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
+            update_user_password(admin["id"], new_hash)
+            logger.info(f"Reset admin password for {DEFAULT_ADMIN_EMAIL}")
         return
     
     pw_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
