@@ -2957,6 +2957,8 @@ async function handleReset(e) {
   .btn-approve:hover {{ background: rgba(0,255,65,0.15); }}
   .btn-reject {{ padding: 4px 12px; background: transparent; border: 1px solid var(--error); border-radius: 4px; color: var(--error); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }}
   .btn-reject:hover {{ background: rgba(255,51,85,0.15); }}
+  .btn-reset {{ padding: 4px 12px; background: transparent; border: 1px solid var(--warning); border-radius: 4px; color: var(--warning); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }}
+  .btn-reset:hover {{ background: rgba(255,170,0,0.15); }}
   .btn-group {{ display: flex; gap: 6px; }}
   a {{ color: var(--accent); text-decoration: none; }}
   a:hover {{ text-decoration: underline; }}
@@ -3006,8 +3008,8 @@ async function handleReset(e) {
   
   <div class="section-title">👥 All Users <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">({len(users)} total)</span></div>
   <table>
-    <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th></tr>
-    {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td><span class="badge badge-{"pending" if u.get("status")=="pending" else "user"}">{u.get("status","active")}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td></tr>' for u in users)}
+    <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th>Actions</th></tr>
+    {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td><span class="badge badge-{"pending" if u.get("status")=="pending" else "user"}">{u.get("status","active")}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td><td>{"<button class=\"btn-reset\" onclick=\"resetUserPassword("+str(u["id"])+")\">🔑 Reset Pw</button>" if u["role"]!="admin" else ""}</td></tr>' for u in users)}
   </table>
   
   <div class="section-title">📋 Recent Applications <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(all users)</span></div>
@@ -3030,6 +3032,18 @@ function rejectUser(id) {{
     .then(r => r.json())
     .then(d => {{ if (d.status === 'ok') location.reload(); else alert(d.error); }});
 }}
+function resetUserPassword(id) {{
+  const newPw = prompt('Enter new password for user ID ' + id + ' (min 6 chars):');
+  if (!newPw || newPw.length < 6) {{ alert('Password must be at least 6 characters'); return; }}
+  fetch('/admin/api/reset-user-password/' + id, {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ password: newPw }})
+  }})
+  .then(r => r.json())
+  .then(d => {{ if (d.status === 'ok') {{ alert('✅ Password reset successfully!'); location.reload(); }} else {{ alert('⚠️ ' + (d.error || 'Failed')); }} }});
+}}
+
 function changePassword(e) {{
   e.preventDefault();
   const current = document.getElementById('currentPw').value;
@@ -3174,6 +3188,26 @@ function changePassword(e) {{
         ok = update_user_password(user['id'], new_hash)
         if ok:
             logger.info(f"Admin password changed for user {user['email']}")
+            return jsonify({'status': 'ok'})
+        return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
+
+    @app.route('/admin/api/reset-user-password/<int:target_user_id>', methods=['POST'])
+    @require_admin
+    def admin_reset_user_password(target_user_id):
+        """Admin resets any user's password."""
+        data = request.get_json()
+        if not data or not data.get('password'):
+            return jsonify({'status': 'error', 'error': 'Password required'}), 400
+        new_password = data['password']
+        if len(new_password) < 6:
+            return jsonify({'status': 'error', 'error': 'Password must be at least 6 characters'}), 400
+        user = get_user_by_id(target_user_id)
+        if not user:
+            return jsonify({'status': 'error', 'error': 'User not found'}), 404
+        new_hash = hash_password(new_password)
+        ok = update_user_password(target_user_id, new_hash)
+        if ok:
+            logger.info(f"Admin reset password for user {user['email']} (id={target_user_id})")
             return jsonify({'status': 'ok'})
         return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
 
