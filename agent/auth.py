@@ -132,16 +132,40 @@ def get_user_id() -> Optional[int]:
 
 # ── Admin Initialization ──────────────────────────────────────────────────────
 
-DEFAULT_ADMIN_EMAIL = "admin@jobagent.com"
+DEFAULT_ADMIN_EMAIL = "Gokulkrishnanalla@gmail.com"
 DEFAULT_ADMIN_PASSWORD = "admin123"
-DEFAULT_ADMIN_NAME = "Admin"
+DEFAULT_ADMIN_NAME = "Gokul"
 
 
 def ensure_admin_exists():
     """Create the default admin user if no admin exists.
     Admin is created with status='active' so they can log in immediately.
+    Also migrates old admin email to the current default if needed.
     """
     init_db()
+    from .database import update_user_email
+    
+    # Migration: check if old admin email exists and update it
+    old_admin_emails = ["admin@jobagent.com"]
+    for old_email in old_admin_emails:
+        if old_email.lower() != DEFAULT_ADMIN_EMAIL.lower():
+            old_admin = get_user_by_email(old_email)
+            if old_admin and old_admin.get("role") == "admin":
+                # Check if new email already taken
+                new_admin = get_user_by_email(DEFAULT_ADMIN_EMAIL)
+                if new_admin:
+                    # New email already exists - delete the old one
+                    from .database import delete_user
+                    delete_user(old_admin["id"])
+                    logger.info(f"Removed old admin account: {old_email}")
+                else:
+                    # Update the old admin's email to the new one
+                    update_user_email(old_admin["id"], DEFAULT_ADMIN_EMAIL)
+                    if DEFAULT_ADMIN_NAME != old_admin.get("name"):
+                        from .database import update_user_name
+                        update_user_name(old_admin["id"], DEFAULT_ADMIN_NAME)
+                    logger.info(f"Migrated admin from {old_email} to {DEFAULT_ADMIN_EMAIL}")
+    
     admin = get_user_by_email(DEFAULT_ADMIN_EMAIL)
     if admin:
         return

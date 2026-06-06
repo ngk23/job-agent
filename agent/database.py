@@ -246,6 +246,31 @@ def update_user_password(user_id: int, password_hash: str) -> bool:
     return cursor.rowcount > 0
 
 
+def update_user_email(user_id: int, email: str) -> bool:
+    """Update a user's email address. Returns True if successful."""
+    conn = get_db()
+    try:
+        cursor = conn.execute(
+            "UPDATE users SET email = ? WHERE id = ?",
+            (email, user_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception:
+        return False
+
+
+def update_user_name(user_id: int, name: str) -> bool:
+    """Update a user's name. Returns True if successful."""
+    conn = get_db()
+    cursor = conn.execute(
+        "UPDATE users SET name = ? WHERE id = ?",
+        (name, user_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
 # ── Password Reset Tokens ─────────────────────────────────────────────────────
 
 def create_password_reset_token(user_id: int) -> Optional[str]:
