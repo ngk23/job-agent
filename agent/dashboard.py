@@ -3867,13 +3867,19 @@ function escHtml(str) {{
     @app.route('/admin/api/reset-user-password/<int:target_user_id>', methods=['POST'])
     @require_admin
     def admin_reset_user_password(target_user_id):
-        """Admin resets any user's password."""
-        data = request.get_json()
-        if not data or not data.get('password'):
-            return jsonify({'status': 'error', 'error': 'Password required'}), 400
-        new_password = data['password']
-        if len(new_password) < 6:
-            return jsonify({'status': 'error', 'error': 'Password must be at least 6 characters'}), 400
+        """Admin resets any user's password.
+        If no password is provided, auto-generates a random one
+        and returns it in the response.
+        """
+        import secrets
+        data = request.get_json(silent=True)
+        if data and data.get('password'):
+            new_password = data['password']
+            if len(new_password) < 6:
+                return jsonify({'status': 'error', 'error': 'Password must be at least 6 characters'}), 400
+        else:
+            # Auto-generate random 12-char password
+            new_password = secrets.token_urlsafe(9)[:12]
         user = get_user_by_id(target_user_id)
         if not user:
             return jsonify({'status': 'error', 'error': 'User not found'}), 404
@@ -3882,7 +3888,7 @@ function escHtml(str) {{
         if ok:
             mark_password_needs_change(target_user_id)
             logger.info(f"Admin reset password for user {user['email']} (id={target_user_id})")
-            return jsonify({'status': 'ok'})
+            return jsonify({'status': 'ok', 'new_password': new_password})
         return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
 
     @app.route('/admin/emergency-reset', methods=['GET'])
