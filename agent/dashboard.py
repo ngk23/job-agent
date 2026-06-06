@@ -33,6 +33,7 @@ from .auth import (
     DEFAULT_ADMIN_EMAIL,
     DEFAULT_ADMIN_PASSWORD,
 )
+from .notifier import notify_approved, notify_rejected
 from .database import (
     init_db,
     get_user_applications,
@@ -2789,16 +2790,35 @@ function rejectUser(id) {{
         ok = approve_user(target_user_id)
         if ok:
             user = get_user_by_id(target_user_id)
-            logger.info(f"Admin approved user: {user['email'] if user else target_user_id}")
-            return jsonify({'status': 'ok'})
+            email = user['email'] if user else ''
+            name = user['name'] if user else 'User'
+            logger.info(f"Admin approved user: {email}")
+            # Send approval notification email
+            if email:
+                sent = notify_approved(email, name)
+                if sent:
+                    logger.info(f"Approval email sent to {email}")
+                else:
+                    logger.info(f"Approval email not sent to {email} (no email service configured)")
+            return jsonify({'status': 'ok', 'email_sent': True if email and os.environ.get('RESEND_API_KEY') else False})
         return jsonify({'status': 'error', 'error': 'User not found or already approved'}), 404
 
     @app.route('/admin/api/reject-user/<int:target_user_id>', methods=['POST'])
     @require_admin
     def admin_reject_user(target_user_id):
+        # Get user info BEFORE deleting
+        user = get_user_by_id(target_user_id)
+        email = user['email'] if user else ''
+        name = user['name'] if user else 'User'
+        
         ok = reject_user(target_user_id)
         if ok:
-            logger.info(f"Admin rejected user: {target_user_id}")
+            logger.info(f"Admin rejected user: {email or target_user_id}")
+            # Send rejection notification email
+            if email:
+                sent = notify_rejected(email, name)
+                if sent:
+                    logger.info(f"Rejection email sent to {email}")
             return jsonify({'status': 'ok'})
         return jsonify({'status': 'error', 'error': 'User not found or already processed'}), 404
 
