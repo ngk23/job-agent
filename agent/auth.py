@@ -41,6 +41,7 @@ def verify_password(password: str, hash_str: str) -> bool:
 def login_user(email: str, password: str) -> Optional[Dict[str, Any]]:
     """Authenticate a user. Returns user dict on success, None on failure.
     Returns dict with 'error' key if user is pending or rejected.
+    Auto-activates the default admin account if it's pending.
     """
     user = get_user_by_email(email)
     if not user:
@@ -51,7 +52,17 @@ def login_user(email: str, password: str) -> Optional[Dict[str, Any]]:
     # Check account status
     status = user.get("status", "active")
     if status == "pending":
-        return {"error": "pending", "message": "Your account is pending admin approval. Please wait for an admin to activate it."}
+        # Auto-activate the default admin account so they can always log in
+        if email.lower() == DEFAULT_ADMIN_EMAIL.lower():
+            from .database import update_user_status, update_user_role
+            update_user_status(user["id"], "active")
+            update_user_role(user["id"], "admin")
+            logger.info(f"Auto-activated admin account: {email}")
+            # Re-fetch user with updated status
+            user = get_user_by_email(email)
+            status = user.get("status", "active")
+        else:
+            return {"error": "pending", "message": "Your account is pending admin approval. Please wait for an admin to activate it."}
     if status == "rejected":
         return {"error": "rejected", "message": "Your account registration was rejected by the admin."}
     
