@@ -3357,6 +3357,8 @@ async function handleReset(e) {
   .btn-reject:hover {{ background: rgba(255,51,85,0.15); }}
   .btn-reset {{ padding: 4px 12px; background: transparent; border: 1px solid var(--warning); border-radius: 4px; color: var(--warning); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }}
   .btn-reset:hover {{ background: rgba(255,170,0,0.15); }}
+  .btn-delete {{ padding: 4px 12px; background: transparent; border: 1px solid var(--error); border-radius: 4px; color: var(--error); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }}
+  .btn-delete:hover {{ background: rgba(255,51,85,0.2); }}
   .btn-group {{ display: flex; gap: 6px; }}
   a {{ color: var(--accent); text-decoration: none; }}
   a:hover {{ text-decoration: underline; }}
@@ -3407,7 +3409,7 @@ async function handleReset(e) {
   <div class="section-title">👥 All Users <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">({len(users)} total)</span></div>
   <table>
     <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th>Actions</th></tr>
-    {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td><span class="badge badge-{"pending" if u.get("status")=="pending" else "user"}">{u.get("status","active")}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td><td>{"<button class=\"btn-reset\" onclick=\"resetUserPassword("+str(u["id"])+")\">🔑 Reset Pw</button>" if u["role"]!="admin" else ""}</td></tr>' for u in users)}
+    {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td><span class="badge badge-{"pending" if u.get("status")=="pending" else "user"}">{u.get("status","active")}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td><td>{"<div class=\"btn-group\"><button class=\"btn-reset\" onclick=\"resetUserPassword(str(u["id"]))\"">🔑 Reset Pw</button><button class=\"btn-delete\" onclick=\"deleteUser(str(u["id"]))\"">🗑 Delete</button></div>"</td></tr>' for u in users)}
   </table>
   
   <div class="section-title">🕐 Session Logs <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(recent 200 logins)</span></div>
@@ -3450,7 +3452,14 @@ function resetUserPassword(id) {{
   }})
   .then(r => r.json())
   .then(d => {{ if (d.status === 'ok') {{ alert('✅ Password reset successfully!'); location.reload(); }} else {{ alert('⚠️ ' + (d.error || 'Failed')); }} }});
-}}
+}
+function deleteUser(id) {{
+  if (!confirm('⚠️ Are you sure you want to DELETE user ID ' + id + '? This will permanently remove all their data!')) return;
+  if (!confirm('🔴 Final confirmation: Delete user ' + id + '? This cannot be undone!')) return;
+  fetch('/admin/api/delete-user/' + id, {{ method: 'POST' }})
+    .then(r => r.json())
+    .then(d => {{ if (d.status === 'ok') {{ location.reload(); }} else {{ alert('Error: ' + (d.error || 'Unknown')); }} }});
+}}}
 
 function changePassword(e) {{
   e.preventDefault();
@@ -3626,6 +3635,20 @@ async function toggleSessionLogs() {{
     def admin_user_apps(target_user_id):
         apps = get_user_applications(target_user_id, limit=500)
         return jsonify({'applications': apps})
+
+    @app.route('/admin/api/delete-user/<int:target_user_id>', methods=['POST'])
+    @require_admin
+    def admin_delete_user(target_user_id):
+        """Admin hard-deletes a user and all their data."""
+        user = get_user_by_id(target_user_id)
+        if not user:
+            return jsonify({'status': 'error', 'error': 'User not found'}), 404
+        if user.get('role') == 'admin':
+            return jsonify({'status': 'error', 'error': 'Cannot delete admin accounts'}), 403
+        email = user['email']
+        delete_user(target_user_id)
+        logger.info(f"Admin deleted user: {email} (ID {target_user_id})")
+        return jsonify({'status': 'ok'})
 
     @app.route('/admin/api/change-password', methods=['POST'])
     @require_admin
