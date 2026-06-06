@@ -2366,7 +2366,7 @@ function _renderJobList(jobs) {
         cover_letter: job.cover_letter || '',
         job: { title: escTitle, company: escCompany, url: escUrl, platform: escPlatform, location: escLocation }
       });
-      saveHtml = `<button class="history-save ${savedClass}" data-id="${jobId}" data-job='${jobData}' onclick="toggleSaveJob(this.dataset.id, this)">${starIcon} ${saveText}</button>`;
+      saveHtml = `<button class="history-save ${savedClass}" data-id="${jobId}" data-job="${encodeURIComponent(jobData)}" onclick="toggleSaveJob(this.dataset.id, this)">${starIcon} ${saveText}</button>`;
     } else {
       saveHtml = `<span class="history-save disabled">☆ Save (80%+ only)</span>`;
     }
@@ -2414,7 +2414,7 @@ async function toggleSaveJob(applicationId, btn) {
       // Send full job data from data-job attribute
       let body;
       if (btn.dataset.job) {
-        body = btn.dataset.job;
+        body = decodeURIComponent(btn.dataset.job);
       } else {
         body = JSON.stringify({ application_id: applicationId });
       }
@@ -2530,6 +2530,7 @@ function escHtml(str) {
         # POST
         # Ensure the admin account exists and is active on every login
         ensure_admin_exists()
+        cleanup_old_saved_jobs(days=7)
         
         data = request.get_json()
         if not data:
@@ -3147,6 +3148,7 @@ async function handleReset(e) {
     def get_history():
         uid = get_user_id()
         jobs = []
+        cleanup_old_saved_jobs(days=7)
         if uid:
             # 1. Load saved jobs from SQLite (user explicitly saved these)
             saved_apps = get_saved_applications(uid)
