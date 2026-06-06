@@ -65,8 +65,17 @@ from .database import (
     cleanup_expired_tokens,
     log_login_attempt,
     get_login_logs,
+    # Security & password change
+    mark_password_changed,
+    mark_password_needs_change,
+    needs_password_change,
+    # Activity tracking
+    log_activity,
+    get_all_recent_activity,
+    get_active_users_count,
+    get_user_activity_stats,
+    get_feedback_summary,
 )
-
 logger = logging.getLogger(__name__)
 
 # ── Background runner ─────────────────────────────────────────────────────────
@@ -2565,7 +2574,7 @@ function escHtml(str) {
             log_activity(uid, email, 'login', details=f"User {result['name']} logged in")
         # Check if password change is needed
         must_change = needs_password_change(uid) if uid else False
-        return jsonify({'status': 'ok', 'user': {'name': result['name'], 'email': result['email']}, 'must_change_password': must_change})return jsonify({'status': 'ok', 'user': {'name': result['name'], 'email': result['email']}})
+        return jsonify({'status': 'ok', 'user': {'name': result['name'], 'email': result['email']}, 'must_change_password': must_change})
 
     @app.route('/signup', methods=['GET', 'POST'])
     def signup_page():
@@ -2600,6 +2609,112 @@ function escHtml(str) {
 
 
     # ── Change Password (user-facing) ──
+
+    
+    CHANGE_PW_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Job Agent - Change Password</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root { --bg: #0a0a0f; --surface: #12121a; --surface2: #1a1a2e; --border: #2a2a4a; --primary: #00ff41; --accent: #0ff; --text: #c8c8d0; --text-dim: #666; --error: #ff3355; }
+  body { font-family: 'Share Tech Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .auth-box { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 40px; width: 100%; max-width: 420px; box-shadow: 0 0 60px rgba(0,255,65,0.05); }
+  .auth-box h1 { font-size: 1.8em; text-align: center; margin-bottom: 8px; background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 3px; text-transform: uppercase; }
+  .auth-box .subtitle { text-align: center; color: var(--text-dim); font-size: 0.8em; margin-bottom: 30px; letter-spacing: 1px; }
+  .auth-box label { display: block; font-size: 0.75em; color: var(--text-dim); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; margin-top: 16px; }
+  .auth-box input { width: 100%; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: 'Share Tech Mono', monospace; font-size: 0.9em; outline: none; transition: border-color 0.2s; }
+  .auth-box input:focus { border-color: var(--primary); box-shadow: 0 0 10px rgba(0,255,65,0.15); }
+  .auth-btn { width: 100%; padding: 14px; margin-top: 24px; background: transparent; border: 2px solid var(--primary); border-radius: 8px; color: var(--primary); font-family: 'Share Tech Mono', monospace; font-size: 1em; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; cursor: pointer; transition: all 0.3s; }
+  .auth-btn:hover { background: rgba(0,255,65,0.08); box-shadow: 0 0 20px rgba(0,255,65,0.2); }
+  .auth-msg { font-size: 0.8em; text-align: center; margin-top: 12px; padding: 8px; border-radius: 4px; display: none; }
+  .auth-msg.success { display: block; color: var(--primary); background: rgba(0,255,65,0.08); border: 1px solid rgba(0,255,65,0.2); }
+  .auth-msg.error { display: block; color: var(--error); background: rgba(255,51,85,0.08); border: 1px solid rgba(255,51,85,0.2); }
+  .auth-link { text-align: center; margin-top: 20px; font-size: 0.8em; color: var(--text-dim); }
+  .auth-link a { color: var(--accent); text-decoration: none; }
+  .auth-link a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="auth-box">
+  <h1>Job Agent</h1>
+  <div class="subtitle" id="pwSubtitle">Change your password</div>
+
+  <form id="pwForm" onsubmit="return handleChangePw(event)">
+    <label>Current Password</label>
+    <input type="password" id="currentPw" placeholder="Your current password" required autocomplete="current-password">
+    <label>New Password</label>
+    <input type="password" id="newPw" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password">
+    <label>Confirm New Password</label>
+    <input type="password" id="confirmPw" placeholder="Repeat new password" required autocomplete="new-password">
+    <button type="submit" class="auth-btn">CHANGE PASSWORD</button>
+    <div class="auth-msg" id="pwMsg"></div>
+  </form>
+
+  <div class="auth-link">
+    <a href="/">Back to dashboard</a>
+  </div>
+</div>
+
+<script>
+async function handleChangePw(e) {
+  e.preventDefault();
+  const current = document.getElementById('currentPw').value;
+  const newPw = document.getElementById('newPw').value;
+  const confirmPw = document.getElementById('confirmPw').value;
+  const msg = document.getElementById('pwMsg');
+  if (newPw !== confirmPw) {
+    msg.textContent = 'Passwords do not match';
+    msg.className = 'auth-msg error';
+    msg.style.display = 'block';
+    return;
+  }
+  if (newPw.length < 6) {
+    msg.textContent = 'Password must be at least 6 characters';
+    msg.className = 'auth-msg error';
+    msg.style.display = 'block';
+    return;
+  }
+  const btn = document.querySelector('.auth-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ SAVING...';
+  msg.className = 'auth-msg';
+  msg.style.display = 'none';
+  try {
+    const resp = await fetch('/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: current, new_password: newPw })
+    });
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      msg.textContent = '✅ Password changed! Redirecting...';
+      msg.className = 'auth-msg success';
+      msg.style.display = 'block';
+      document.getElementById('pwForm').style.display = 'none';
+      document.getElementById('pwSubtitle').textContent = 'Password updated!';
+      setTimeout(() => { window.location.href = '/'; }, 1500);
+    } else {
+      msg.textContent = data.error || 'Failed to change password';
+      msg.className = 'auth-msg error';
+      msg.style.display = 'block';
+    }
+  } catch (err) {
+    msg.textContent = 'Error: ' + err.message;
+    msg.className = 'auth-msg error';
+    msg.style.display = 'block';
+  }
+  btn.disabled = false;
+  btn.textContent = 'CHANGE PASSWORD';
+  return false;
+}
+</script>
+</body>
+</html>
+"""
 
     @app.route('/change-password', methods=['GET', 'POST'])
     @require_login
@@ -2661,6 +2776,15 @@ function escHtml(str) {
                     logger.info(f"Password reset email sent to {email}")
                 else:
                     logger.info(f"Password reset email would be sent to {email} (no RESEND_API_KEY)")
+                    # Show the reset link directly since email is not configured
+                    if token:
+                        reset_url = url_for('reset_password', token=token, _external=True)
+                        return jsonify({
+                            'status': 'ok',
+                            'message': '📧 Email sending not configured. Use this link directly:',
+                            'reset_url': reset_url,
+                            'token': token
+                        })
         return jsonify({
             'status': 'ok',
             'message': 'If that email exists and is active, a reset link has been sent. Check your inbox (and spam folder).'
@@ -2798,7 +2922,11 @@ async function handleForgot(e) {
       body: JSON.stringify({ email })
     });
     const data = await resp.json();
-    msg.textContent = data.message || 'If that email exists, a reset link has been sent.';
+    if (data.reset_url) {
+      msg.innerHTML = data.message + '<br><a href="' + data.reset_url + '" style="color:var(--accent);word-break:break-all;display:block;margin-top:8px;font-size:0.85em;" target="_blank">' + data.reset_url + '</a>';
+    } else {
+      msg.textContent = data.message || 'If that email exists, a reset link has been sent.';
+    }
     msg.className = 'auth-msg success';
     msg.style.display = 'block';
     document.getElementById('forgotEmail').value = '';
@@ -3653,6 +3781,7 @@ async function handleReset(e) {
         new_hash = hash_password(new_password)
         ok = update_user_password(target_user_id, new_hash)
         if ok:
+            mark_password_needs_change(target_user_id)
             logger.info(f"Admin reset password for user {user['email']} (id={target_user_id})")
             return jsonify({'status': 'ok'})
         return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
