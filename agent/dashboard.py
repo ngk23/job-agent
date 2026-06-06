@@ -3754,8 +3754,8 @@ function escHtml(str) {{
                 f'</div></td></tr>'
             )
         users_rows_str = "".join(users_rows_list)
-        html = html.replace('{{pending_section}}', pending_section)
-        html = html.replace('{{users_rows}}', users_rows_str)
+        html = html.replace('{pending_section}', pending_section)
+        html = html.replace('{users_rows}', users_rows_str)
         return render_template_string(html)
 
     @app.route('/admin/api/stats')
