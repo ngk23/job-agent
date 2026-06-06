@@ -41,6 +41,7 @@ def init_db():
             name TEXT NOT NULL,
             role TEXT DEFAULT 'user',
             api_key TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -89,16 +90,39 @@ def init_db():
     """)
     conn.commit()
 
+    # Migration: add 'status' column if it doesn't exist (for databases created before this feature)
+    _migrate_add_column("users", "status", "TEXT DEFAULT 'active'")
+
+
+def _migrate_add_column(table: str, column: str, col_def: str):
+    """Add a column to a table if it doesn't already exist (safe migration)."""
+    conn = get_db()
+    try:
+        # Check if column exists
+        cursor = conn.execute(f"PRAGMA table_info({table})")
+        cols = {r[1] for r in cursor.fetchall()}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+            conn.commit()
+            logger = __import__('logging').getLogger(__name__)
+            logger.info(f"Added column '{column}' to '{table}' table")
+    except Exception as e:
+        logger = __import__('logging').getLogger(__name__)
+        logger.warning(f"Migration failed for {table}.{column}: {e}")
+
 
 # ── User Operations ───────────────────────────────────────────────────────────
 
-def create_user(email: str, password_hash: str, name: str, role: str = "user", api_key: str = "") -> Optional[Dict[str, Any]]:
-    """Create a new user. Returns user dict or None if email exists."""
+def create_user(email: str, password_hash: str, name: str, role: str = "user", api_key: str = "", status: str = "pending") -> Optional[Dict[str, Any]]:
+    """Create a new user. Returns user dict or None if email exists.
+    By default, new users are created with status='pending' (awaiting admin approval).
+    Admin users are created with status='active'.
+    """
     conn = get_db()
     try:
         cursor = conn.execute(
-            "INSERT INTO users (email, password_hash, name, role, api_key) VALUES (?, ?, ?, ?, ?)",
-            (email, password_hash, name, role, api_key),
+            "INSERT INTO users (email, password_hash, name, role, api_key, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (email, password_hash, name, role, api_key, status),
         )
         conn.commit()
         return get_user_by_id(cursor.lastrowid)
@@ -124,7 +148,39 @@ def get_all_users() -> List[Dict[str, Any]]:
     """Get all users (for admin)."""
     conn = get_db()
     rows = conn.execute(
-        "SELECT id, email, name, role, created_at FROM users ORDER BY created_at DESC"
+        "SELECT id, email, name, role, status, created_at FROM users ORDER BY created_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def approve_user(user_id: int) -> bool:
+    """Approve a pending user. Returns True if successful."""
+    conn = get_db()
+    cursor = conn.execute(
+        "UPDATE users SET status = 'active' WHERE id = ? AND status = 'pending'",
+        (user_id,),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def reject_user(user_id: int) -> bool:
+    """Reject a pending user and delete their account. Returns True if successful."""
+    conn = get_db()
+    # Delete user (cascades to applications, applied_jobs, saved_jobs)
+    cursor = conn.execute(
+        "DELETE FROM users WHERE id = ? AND status = 'pending'",
+        (user_id,),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def get_pending_users() -> List[Dict[str, Any]]:
+    """Get all pending users (awaiting admin approval)."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, email, name, created_at FROM users WHERE status = 'pending' ORDER BY created_at ASC"
     ).fetchall()
     return [dict(r) for r in rows]
 

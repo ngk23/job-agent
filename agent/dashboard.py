@@ -43,6 +43,9 @@ from .database import (
     unsave_job as db_unsave_job,
     get_saved_application_ids,
     get_all_users,
+    get_pending_users,
+    approve_user,
+    reject_user,
     get_stats,
     clear_user_applications,
     clear_all_applications,
@@ -101,8 +104,11 @@ def _mark_applied(job_url: str) -> bool:
     return True
 
 
-def _run_agent_in_thread(cwd: str, api_key: str = ""):
-    """Run the agent as a subprocess and push output lines to a queue."""
+def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = None):
+    """Run the agent as a subprocess and push output lines to a queue.
+    user_id is captured in the Flask request context and passed here to avoid
+    accessing Flask session from a background thread (which won't have it).
+    """
     global _output_queue, _run_process, _run_complete, _run_returncode, _stop_requested
 
     env = os.environ.copy()
@@ -119,9 +125,8 @@ def _run_agent_in_thread(cwd: str, api_key: str = ""):
     # Pass the selected region to the agent
     env["AGENT_LOCATION"] = _selected_region
     # Pass the user ID so the tracker saves per-user files
-    uid = get_user_id()
-    if uid:
-        env["USER_ID"] = str(uid)
+    if user_id:
+        env["USER_ID"] = str(user_id)
 
     cmd = [sys.executable, "-m", "agent", "run", "--headless"]
 
@@ -561,6 +566,20 @@ async function handleSignup(e) {
     const data = await resp.json();
     if (data.status === 'ok') {
       window.location.href = '/';
+    } else if (data.status === 'pending_approval') {
+      // Show success: waiting for admin approval
+      document.getElementById('signupForm').style.display = 'none';
+      errorEl.style.display = 'none';
+      const msg = document.createElement('div');
+      msg.style.cssText = 'text-align:center;padding:20px 0;';
+      msg.innerHTML = '<div style="font-size:2em;margin-bottom:12px;">⏳</div>'
+        + '<div style="color:var(--primary);font-size:1em;margin-bottom:8px;">Account Created!</div>'
+        + '<div style="color:var(--text-dim);font-size:0.85em;line-height:1.5;">'
+        + 'Your account is pending admin approval.<br>'
+        + 'An admin will activate your account shortly.<br><br>'
+        + '<a href="/login" style="color:var(--accent);">Back to login</a>'
+        + '</div>';
+      document.querySelector('.auth-box').appendChild(msg);
     } else {
       errorEl.textContent = data.error || 'Sign up failed';
       errorEl.style.display = 'block';
@@ -2218,11 +2237,17 @@ function escHtml(str) {
         password = data.get('password', '')
         if not email or not password:
             return jsonify({'status': 'error', 'error': 'Email and password required'}), 400
-        user = login_user(email, password)
-        if not user:
+        result = login_user(email, password)
+        # Check if result is an error dict (pending/rejected) or actual user
+        if isinstance(result, dict) and result.get('error'):
+            if result['error'] == 'pending':
+                return jsonify({'status': 'error', 'error': '⏳ Your account is pending admin approval. Please wait for an admin to activate it.'}), 403
+            elif result['error'] == 'rejected':
+                return jsonify({'status': 'error', 'error': '❌ Your account registration was rejected by the admin.'}), 403
+        if not result:
             return jsonify({'status': 'error', 'error': 'Invalid email or password'}), 401
         logger.info(f"User logged in: {email}")
-        return jsonify({'status': 'ok', 'user': {'name': user['name'], 'email': user['email']}})
+        return jsonify({'status': 'ok', 'user': {'name': result['name'], 'email': result['email']}})
 
     @app.route('/signup', methods=['GET', 'POST'])
     def signup_page():
@@ -2245,10 +2270,9 @@ function escHtml(str) {
         user = register_user(email, password, name)
         if not user:
             return jsonify({'status': 'error', 'error': 'Email already registered'}), 409
-        # Auto-login after signup
-        login_user(email, password)
-        logger.info(f"New user registered: {email}")
-        return jsonify({'status': 'ok', 'user': {'name': user['name'], 'email': user['email']}})
+        # No auto-login — user must wait for admin approval
+        logger.info(f"New user registered (pending approval): {email}")
+        return jsonify({'status': 'pending_approval', 'message': 'Account created! Please wait for admin approval before logging in.'})
 
     @app.route('/logout', methods=['POST'])
     def logout():
@@ -2380,6 +2404,9 @@ function escHtml(str) {
         project_root = Path(__file__).resolve().parent.parent
         work_dir = str(project_root)
 
+        # Capture user_id in request context BEFORE spawning thread
+        current_user_id = get_user_id()
+
         def generate():
             global _run_complete, _stop_requested
             yield f"data: [SYSTEM] Starting agent with CV: {_uploaded_filename}\n\n"
@@ -2388,7 +2415,7 @@ function escHtml(str) {
             api_key = _gui_api_key or config.anthropic_api_key
             thread = threading.Thread(
                 target=_run_agent_in_thread,
-                args=(work_dir, api_key),
+                args=(work_dir, api_key, current_user_id),
                 daemon=True,
             )
             thread.start()
@@ -2628,8 +2655,10 @@ function escHtml(str) {
     def admin_panel():
         """Admin panel page."""
         users = get_all_users()
+        pending_users = get_pending_users()
         all_apps = get_all_applications(limit=200)
         stats = get_stats()
+        pending_count = len(pending_users)
         html = f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -2637,14 +2666,15 @@ function escHtml(str) {
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap');
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  :root {{ --bg: #0a0a0f; --surface: #12121a; --surface2: #1a1a2e; --border: #2a2a4a; --primary: #00ff41; --accent: #0ff; --text: #c8c8d0; --text-dim: #666; }}
+  :root {{ --bg: #0a0a0f; --surface: #12121a; --surface2: #1a1a2e; --border: #2a2a4a; --primary: #00ff41; --accent: #0ff; --text: #c8c8d0; --text-dim: #666; --warning: #ffaa00; --error: #ff3355; }}
   body {{ font-family: 'Share Tech Mono', monospace; background: var(--bg); color: var(--text); padding: 30px; }}
   .container {{ max-width: 1200px; margin: 0 auto; }}
   h1 {{ font-size: 1.8em; background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 30px; }}
-  .stats {{ display: flex; gap: 16px; margin-bottom: 30px; }}
-  .stat-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 24px; flex: 1; }}
+  .stats {{ display: flex; gap: 16px; margin-bottom: 30px; flex-wrap: wrap; }}
+  .stat-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 24px; flex: 1; min-width: 120px; }}
   .stat-card .num {{ font-size: 2em; color: var(--primary); }}
   .stat-card .lbl {{ font-size: 0.75em; color: var(--text-dim); text-transform: uppercase; }}
+  .stat-card.warning .num {{ color: var(--warning); }}
   table {{ width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 30px; }}
   th {{ background: var(--surface2); color: var(--accent); padding: 10px 14px; text-align: left; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px; }}
   td {{ padding: 10px 14px; border-top: 1px solid var(--border); font-size: 0.85em; }}
@@ -2652,16 +2682,28 @@ function escHtml(str) {
   .badge {{ padding: 2px 8px; border-radius: 4px; font-size: 0.75em; }}
   .badge-admin {{ background: rgba(0,255,255,0.15); color: var(--accent); border: 1px solid rgba(0,255,255,0.3); }}
   .badge-user {{ background: rgba(0,255,65,0.1); color: var(--primary); border: 1px solid rgba(0,255,65,0.2); }}
+  .badge-pending {{ background: rgba(255,170,0,0.15); color: var(--warning); border: 1px solid rgba(255,170,0,0.3); }}
+  .btn-approve {{ padding: 4px 12px; background: transparent; border: 1px solid var(--primary); border-radius: 4px; color: var(--primary); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }}
+  .btn-approve:hover {{ background: rgba(0,255,65,0.15); }}
+  .btn-reject {{ padding: 4px 12px; background: transparent; border: 1px solid var(--error); border-radius: 4px; color: var(--error); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }}
+  .btn-reject:hover {{ background: rgba(255,51,85,0.15); }}
+  .btn-group {{ display: flex; gap: 6px; }}
   a {{ color: var(--accent); text-decoration: none; }}
   a:hover {{ text-decoration: underline; }}
-  .nav {{ margin-bottom: 20px; }}
-  .nav a {{ margin-right: 16px; font-size: 0.85em; }}
+  .nav {{ margin-bottom: 20px; display: flex; gap: 16px; align-items: center; }}
+  .nav a {{ font-size: 0.85em; }}
+  .nav .pending-badge {{ background: rgba(255,170,0,0.15); color: var(--warning); padding: 2px 10px; border-radius: 12px; font-size: 0.75em; }}
   .score {{ color: var(--primary); font-weight: bold; }}
-  .section-title {{ color: var(--accent); font-size: 0.9em; text-transform: uppercase; letter-spacing: 2px; margin: 20px 0 10px; }}
+  .section-title {{ color: var(--accent); font-size: 0.9em; text-transform: uppercase; letter-spacing: 2px; margin: 20px 0 10px; display: flex; align-items: center; gap: 10px; }}
+  .empty {{ text-align: center; padding: 30px; color: var(--text-dim); font-size: 0.85em; }}
 </style></head>
 <body>
 <div class="container">
-  <div class="nav"><a href="/">← Dashboard</a> <a href="/logout" onclick="fetch('/logout',{{method:'POST'}}).then(()=>location='/login')">Logout</a></div>
+  <div class="nav">
+    <a href="/">← Dashboard</a>
+    <span style="flex:1;"></span>
+    <a href="/logout" onclick="fetch('/logout',{{method:'POST'}}).then(()=>location='/login')">Logout</a>
+  </div>
   <h1>🛡️ Admin Panel</h1>
   
   <div class="stats">
@@ -2670,20 +2712,60 @@ function escHtml(str) {
     <div class="stat-card"><div class="num">{stats['high_match']}</div><div class="lbl">80%+ Match</div></div>
     <div class="stat-card"><div class="num">{stats['saved_jobs']}</div><div class="lbl">Saved Jobs</div></div>
     <div class="stat-card"><div class="num">{len(users)}</div><div class="lbl">Users</div></div>
+    <div class="stat-card warning"><div class="num">{pending_count}</div><div class="lbl">Pending ⏳</div></div>
   </div>
   
-  <div class="section-title">👥 Users</div>
+  {{pending_section}}
+  
+  <div class="section-title">👥 All Users <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">({len(users)} total)</span></div>
   <table>
-    <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Joined</th></tr>
-    {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td></tr>' for u in users)}
+    <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th></tr>
+    {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td><span class="badge badge-{"pending" if u.get("status")=="pending" else "user"}">{u.get("status","active")}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td></tr>' for u in users)}
   </table>
   
-  <div class="section-title">📋 Recent Applications (all users)</div>
+  <div class="section-title">📋 Recent Applications <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(all users)</span></div>
   <table>
     <tr><th>User</th><th>Title</th><th>Company</th><th>Score</th><th>Platform</th><th>Date</th></tr>
     {"".join(f'<tr><td>{a.get("user_name","?")}</td><td>{a.get("title","?")}</td><td>{a.get("company","?")}</td><td class="score">{a.get("ai_score",0)}%</td><td>{a.get("platform","")}</td><td>{(a.get("timestamp") or "")[:10]}</td></tr>' for a in all_apps[:100])}
   </table>
-</div></body></html>"""
+</div>
+
+<script>
+function approveUser(id) {{
+  if (!confirm('Approve this user?')) return;
+  fetch('/admin/api/approve-user/' + id, {{ method: 'POST' }})
+    .then(r => r.json())
+    .then(d => {{ if (d.status === 'ok') location.reload(); else alert(d.error); }});
+}}
+function rejectUser(id) {{
+  if (!confirm('Reject and delete this user account?')) return;
+  fetch('/admin/api/reject-user/' + id, {{ method: 'POST' }})
+    .then(r => r.json())
+    .then(d => {{ if (d.status === 'ok') location.reload(); else alert(d.error); }});
+}}
+</script>
+</body></html>"""
+        # Build pending section
+        if pending_users:
+            pending_rows = "".join(
+                f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td>'
+                f'<td><div class="btn-group">'
+                f'<button class="btn-approve" onclick="approveUser({u["id"]})">✅ Approve</button>'
+                f'<button class="btn-reject" onclick="rejectUser({u["id"]})">✕ Reject</button>'
+                f'</div></td></tr>'
+                for u in pending_users
+            )
+            pending_section = f'''
+  <div class="section-title">⏳ Pending Approval <span style="font-size:0.7em;color:var(--warning);font-weight:400;">({len(pending_users)} waiting)</span></div>
+  <table>
+    <tr><th>ID</th><th>Name</th><th>Email</th><th>Actions</th></tr>
+    {pending_rows}
+  </table>
+'''
+        else:
+            pending_section = '<div class="section-title">⏳ Pending Approval <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(none)</span></div><div class="empty">No pending users. All accounts have been processed.</div>'
+        
+        html = html.replace('{{pending_section}}', pending_section)
         return render_template_string(html)
 
     @app.route('/admin/api/stats')
@@ -2695,6 +2777,30 @@ function escHtml(str) {
     @require_admin
     def admin_users():
         return jsonify({'users': get_all_users()})
+
+    @app.route('/admin/api/pending')
+    @require_admin
+    def admin_pending():
+        return jsonify({'pending': get_pending_users()})
+
+    @app.route('/admin/api/approve-user/<int:target_user_id>', methods=['POST'])
+    @require_admin
+    def admin_approve_user(target_user_id):
+        ok = approve_user(target_user_id)
+        if ok:
+            user = get_user_by_id(target_user_id)
+            logger.info(f"Admin approved user: {user['email'] if user else target_user_id}")
+            return jsonify({'status': 'ok'})
+        return jsonify({'status': 'error', 'error': 'User not found or already approved'}), 404
+
+    @app.route('/admin/api/reject-user/<int:target_user_id>', methods=['POST'])
+    @require_admin
+    def admin_reject_user(target_user_id):
+        ok = reject_user(target_user_id)
+        if ok:
+            logger.info(f"Admin rejected user: {target_user_id}")
+            return jsonify({'status': 'ok'})
+        return jsonify({'status': 'error', 'error': 'User not found or already processed'}), 404
 
     @app.route('/admin/api/user-apps/<int:target_user_id>')
     @require_admin
