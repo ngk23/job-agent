@@ -86,10 +86,11 @@ class AppConfig:
         self.max_job_search = int(get_env("MAX_JOB_SEARCH", str(self.max_job_search)))
 
         # Auto-detect Hugging Face Spaces environment
+        # /data is the persistent volume shared across all replicas
         if get_env("SPACE_ID") or get_env("HF_SPACE", "").lower() == "true":
             self.dashboard_host = "0.0.0.0"
             self.dashboard_port = 7860
-            self.data_dir = "/data"
+            self.data_dir = get_env("DATA_DIR", "/data")
 
     @property
     def logs_dir(self) -> str:

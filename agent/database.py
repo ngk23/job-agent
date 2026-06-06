@@ -15,8 +15,9 @@ from .config import get_env
 # Thread-local storage for DB connections
 _local = threading.local()
 
-# Database path — HF Spaces uses /data, local uses current dir
-DB_DIR = get_env("DATA_DIR", ".")
+# Database path — HF Spaces uses /data (persistent across replicas), local uses current dir
+_hf_space = bool(get_env("SPACE_ID") or get_env("HF_SPACE", "").lower() == "true")
+DB_DIR = get_env("DATA_DIR", "/data" if _hf_space else ".")
 DB_PATH = str(Path(DB_DIR) / "job_agent.db")
 
 
