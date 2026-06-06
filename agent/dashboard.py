@@ -2559,7 +2559,13 @@ function escHtml(str) {
             ip_address=request.remote_addr or '',
             user_agent=request.user_agent.string if request.user_agent else '',
         )
-        return jsonify({'status': 'ok', 'user': {'name': result['name'], 'email': result['email']}})
+                # Log activity
+        uid = result.get('id')
+        if uid:
+            log_activity(uid, email, 'login', details=f"User {result['name']} logged in")
+        # Check if password change is needed
+        must_change = needs_password_change(uid) if uid else False
+        return jsonify({'status': 'ok', 'user': {'name': result['name'], 'email': result['email']}, 'must_change_password': must_change})return jsonify({'status': 'ok', 'user': {'name': result['name'], 'email': result['email']}})
 
     @app.route('/signup', methods=['GET', 'POST'])
     def signup_page():
@@ -2591,6 +2597,42 @@ function escHtml(str) {
         """Logout the current user."""
         logout_user()
         return jsonify({'status': 'ok'})
+
+
+    # ── Change Password (user-facing) ──
+
+    @app.route('/change-password', methods=['GET', 'POST'])
+    @require_login
+    def change_password_page():
+        """Change password. Users redirected here if admin reset forces change."""
+        uid = get_user_id()
+        if request.method == 'GET':
+            return render_template_string(CHANGE_PW_HTML)
+        data = request.get_json()
+        if not data:
+            return jsonify({'status': 'error', 'error': 'Invalid request'}), 400
+        current = data.get('current_password', '')
+        new_pw = data.get('new_password', '')
+        if not current or not new_pw:
+            return jsonify({'status': 'error', 'error': 'Both passwords required'}), 400
+        if len(new_pw) < 6:
+            return jsonify({'status': 'error', 'error': 'Min 6 characters'}), 400
+        if current == new_pw:
+            return jsonify({'status': 'error', 'error': 'New password must differ'}), 400
+        user = get_user_by_id(uid)
+        if not user:
+            return jsonify({'status': 'error', 'error': 'User not found'}), 404
+        from werkzeug.security import check_password_hash
+        if not check_password_hash(user['password_hash'], current):
+            return jsonify({'status': 'error', 'error': 'Current password is incorrect'}), 403
+        pw_hash = hash_password(new_pw)
+        ok = update_user_password(uid, pw_hash)
+        if ok:
+            mark_password_changed(uid)
+            log_activity(uid, user['email'], 'password_change', 'User changed password')
+            logger.info(f"User {uid} changed password")
+            return jsonify({'status': 'ok', 'message': 'Password changed'})
+        return jsonify({'status': 'error', 'error': 'Failed'}), 500
 
     # ── Forgot / Reset Password Routes ──
 
@@ -2903,6 +2945,11 @@ async function handleReset(e) {
     @app.route('/')
     @require_login
     def index():
+        # Force password change if needed
+        uid = get_user_id()
+        if uid and needs_password_change(uid):
+            return redirect(url_for('change_password_page'))
+
         user = get_current_user()
         return render_template_string(GUI_HTML, user=user)
 
@@ -3324,9 +3371,9 @@ async function handleReset(e) {
         """Admin panel page."""
         users = get_all_users()
         pending_users = get_pending_users()
-        all_apps = get_all_applications(limit=200)
-        stats = get_stats()
         pending_count = len(pending_users)
+        feedback_stats = get_feedback_summary()
+        active_count = get_active_users_count(minutes=30)
         html = f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -3368,7 +3415,26 @@ async function handleReset(e) {
   .score {{ color: var(--primary); font-weight: bold; }}
   .section-title {{ color: var(--accent); font-size: 0.9em; text-transform: uppercase; letter-spacing: 2px; margin: 20px 0 10px; display: flex; align-items: center; gap: 10px; }}
   .empty {{ text-align: center; padding: 30px; color: var(--text-dim); font-size: 0.85em; }}
-</style></head>
+  .admin-summary {{ display: flex; gap: 20px; margin-bottom: 24px; flex-wrap: wrap; }}
+  .sum-item {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 20px; text-align: center; min-width: 130px; flex: 1; }}
+  .sum-num {{ font-size: 1.6em; color: var(--primary); display: block; }}
+  .sum-item:nth-child(2) .sum-num {{ color: var(--warning); }}
+  .sum-item:nth-child(3) .sum-num {{ color: var(--accent); }}
+  .sum-item:nth-child(4) .sum-num {{ color: var(--primary); }}
+  .modal {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; }}
+  .modal.open {{ display: flex; }}
+  .modal-content {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; max-width: 800px; width: 92%; max-height: 80vh; overflow-y: auto; }}
+  .modal-content h3 {{ color: var(--accent); margin-bottom: 12px; }}
+  .modal-close {{ float: right; cursor: pointer; color: var(--text-dim); font-size: 1.3em; }}
+  .modal-close:hover {{ color: var(--error); }}
+  .activity-entry {{ padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 0.8em; }}
+  .activity-entry:last-child {{ border-bottom: none; }}
+  .activity-time {{ color: var(--text-dim); font-size: 0.85em; }}
+  .activity-action {{ color: var(--accent); }}
+  .pulse {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; }}
+  .pulse.online {{ background: var(--primary); box-shadow: 0 0 6px var(--primary); }}
+  .btn-activity {{ padding: 4px 10px; background: transparent; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; }}
+  .btn-activity:hover {{ background: rgba(0,255,255,0.1); }}</style></head>
 <body>
 <div class="container">
   <div class="nav">
@@ -3378,13 +3444,13 @@ async function handleReset(e) {
   </div>
   <h1>🛡️ Admin Panel</h1>
   
-  <div class="stats">
-    <div class="stat-card"><div class="num">{stats['total_jobs']}</div><div class="lbl">Total Jobs</div></div>
-    <div class="stat-card"><div class="num">{stats['avg_score']}</div><div class="lbl">Avg Score</div></div>
-    <div class="stat-card"><div class="num">{stats['high_match']}</div><div class="lbl">80%+ Match</div></div>
-    <div class="stat-card"><div class="num">{stats['saved_jobs']}</div><div class="lbl">Saved Jobs</div></div>
-    <div class="stat-card"><div class="num">{len(users)}</div><div class="lbl">Users</div></div>
-    <div class="stat-card warning"><div class="num">{pending_count}</div><div class="lbl">Pending ⏳</div></div>
+  <div class="admin-summary">
+    <div class="sum-item"><span class="sum-num">{len(users)}</span> Registered Users</div>
+    <div class="sum-item"><span class="sum-num">{pending_count}</span> Pending ⏳</div>
+    <div class="sum-item"><span class="sum-num" id="activeNowCount">-</span> Active Now <span class="pulse online"></span></div>
+    <div class="sum-item"><span class="sum-num" id="feedbackRate">-</span> Positive Feedback</div>
+  </div>
+
   </div>
 
   <!-- Change Password Section -->
@@ -3408,151 +3474,19 @@ async function handleReset(e) {
   
   <div class="section-title">👥 All Users <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">({len(users)} total)</span></div>
   <table>
-    <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th>Actions</th></tr>
-    {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td><span class="badge badge-{"pending" if u.get("status")=="pending" else "user"}">{u.get("status","active")}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td><td>{"<div class=\"btn-group\"><button class=\"btn-reset\" onclick=\"resetUserPassword(str(u["id"]))\"">🔑 Reset Pw</button><button class=\"btn-delete\" onclick=\"deleteUser(str(u["id"]))\"">🗑 Delete</button></div>"</td></tr>' for u in users)}
+    <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th>Track</th><th>Actions</th></tr>
+    {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td><span class="badge badge-{"pending" if u.get("status")=="pending" else "user"}">{u.get("status","active")}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td><td><button class=\"btn-activity\" onclick=\"showUserActivity(' + str(u['id']) + ')\"">📋 Activity</button></td><td>{"<div class=\"btn-group\"><button class=\"btn-reset\" onclick=\"resetUserPassword(str(u["id"]))\"">🔑 Reset Pw</button><button class=\"btn-delete\" onclick=\"deleteUser(str(u["id"]))\"">🗑 Delete</button></div>"</td></tr>' for u in users)}
   </table>
   
-  <div class="section-title">🕐 Session Logs <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(recent 200 logins)</span></div>
-  <div style="margin-bottom:12px;">
-    <button onclick="toggleSessionLogs()" style="padding:6px 16px;background:transparent;border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:0.8em;cursor:pointer;transition:all 0.2s;">
-      📋 Show Session Logs
-    </button>
-  </div>
-  <div id="sessionLogSection" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:24px;overflow-x:auto;">
-    <div id="sessionLogContent" style="font-size:0.8em;color:var(--text-dim);text-align:center;padding:20px;">Loading...</div>
+  <  <div class="section-title"> Recent Activity <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(all users)</span></div>
+  <div id="recentActivityContainer" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:24px;">
+    <div id="recentActivityContent" style="font-size:0.8em;color:var(--text-dim);text-align:center;padding:20px;">Loading activity...</div>
   </div>
 
-  <div class="section-title">📋 Recent Applications <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(all users)</span></div>
-  <table>
-    <tr><th>User</th><th>Title</th><th>Company</th><th>Score</th><th>Platform</th><th>Date</th></tr>
-    {"".join(f'<tr><td>{a.get("user_name","?")}</td><td>{a.get("title","?")}</td><td>{a.get("company","?")}</td><td class="score">{a.get("ai_score",0)}%</td><td>{a.get("platform","")}</td><td>{(a.get("timestamp") or "")[:10]}</td></tr>' for a in all_apps[:100])}
-  </table>
-</div>
-
-<script>
-function approveUser(id) {{
-  if (!confirm('Approve this user?')) return;
-  fetch('/admin/api/approve-user/' + id, {{ method: 'POST' }})
-    .then(r => r.json())
-    .then(d => {{ if (d.status === 'ok') location.reload(); else alert(d.error); }});
-}}
-function rejectUser(id) {{
-  if (!confirm('Reject and delete this user account?')) return;
-  fetch('/admin/api/reject-user/' + id, {{ method: 'POST' }})
-    .then(r => r.json())
-    .then(d => {{ if (d.status === 'ok') location.reload(); else alert(d.error); }});
-}}
-function resetUserPassword(id) {{
-  const newPw = prompt('Enter new password for user ID ' + id + ' (min 6 chars):');
-  if (!newPw || newPw.length < 6) {{ alert('Password must be at least 6 characters'); return; }}
-  fetch('/admin/api/reset-user-password/' + id, {{
-    method: 'POST',
-    headers: {{ 'Content-Type': 'application/json' }},
-    body: JSON.stringify({{ password: newPw }})
-  }})
-  .then(r => r.json())
-  .then(d => {{ if (d.status === 'ok') {{ alert('✅ Password reset successfully!'); location.reload(); }} else {{ alert('⚠️ ' + (d.error || 'Failed')); }} }});
-}
-function deleteUser(id) {{
-  if (!confirm('⚠️ Are you sure you want to DELETE user ID ' + id + '? This will permanently remove all their data!')) return;
-  if (!confirm('🔴 Final confirmation: Delete user ' + id + '? This cannot be undone!')) return;
-  fetch('/admin/api/delete-user/' + id, {{ method: 'POST' }})
-    .then(r => r.json())
-    .then(d => {{ if (d.status === 'ok') {{ location.reload(); }} else {{ alert('Error: ' + (d.error || 'Unknown')); }} }});
-}}}
-
-function changePassword(e) {{
-  e.preventDefault();
-  const current = document.getElementById('currentPw').value;
-  const newPw = document.getElementById('newPw').value;
-  const msg = document.getElementById('pwMsg');
-  if (!current || !newPw) return;
-  if (newPw.length < 6) {{ msg.textContent = '⚠️ Min 6 characters'; msg.style.display = 'block'; msg.style.color = '#ff3355'; return; }}
-  msg.textContent = '⏳ Updating...';
-  msg.style.display = 'block';
-  msg.style.color = '#666';
-  fetch('/admin/api/change-password', {{
-    method: 'POST',
-    headers: {{ 'Content-Type': 'application/json' }},
-    body: JSON.stringify({{ current_password: current, new_password: newPw }})
-  }})
-  .then(r => r.json())
-  .then(d => {{
-    if (d.status === 'ok') {{
-      msg.textContent = '✅ Password updated successfully!';
-      msg.style.color = '#00ff41';
-      document.getElementById('currentPw').value = '';
-      document.getElementById('newPw').value = '';
-    }} else {{
-      msg.textContent = '⚠️ ' + (d.error || 'Failed');
-      msg.style.color = '#ff3355';
-    }}
-  }})
-  .catch(err => {{
-    msg.textContent = '⚠️ Error: ' + err.message;
-    msg.style.color = '#ff3355';
-  }});
-  return false;
-}}
-
-let _sessionLogsVisible = false;
-async function toggleSessionLogs() {{
-  const section = document.getElementById('sessionLogSection');
-  const btn = event.target;
-  if (_sessionLogsVisible) {{
-    section.style.display = 'none';
-    btn.textContent = '📋 Show Session Logs';
-    _sessionLogsVisible = false;
-    return;
-  }}
-  section.style.display = 'block';
-  btn.textContent = '📋 Hide Session Logs';
-  _sessionLogsVisible = true;
-  document.getElementById('sessionLogContent').innerHTML = '<span class="spinner" style="display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:middle;margin-right:8px;"></span> Loading...';
-  try {{
-    const resp = await fetch('/admin/api/session-logs');
-    const data = await resp.json();
-    const logs = data.logs || [];
-    if (logs.length === 0) {{
-      document.getElementById('sessionLogContent').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim);">No login records yet.</div>';
-      return;
-    }}
-    const failedCount = logs.filter(l => l.success === 0).length;
-    let html = '<div style="margin-bottom:10px;display:flex;gap:16px;flex-wrap:wrap;">'
-      + '<span style="color:var(--accent);font-size:0.85em;">Total Logins: <strong style="color:var(--text);">' + logs.length + '</strong></span>'
-      + '<span style="color:var(--warning);font-size:0.85em;">Failed: <strong style="color:var(--error);">' + failedCount + '</strong></span>'
-      + '</div>';
-    html += '<table style="width:100%;border-collapse:collapse;font-size:0.8em;">'
-      + '<tr style="background:var(--surface2);color:var(--accent);font-size:0.75em;text-transform:uppercase;letter-spacing:1px;">'
-      + '<th style="padding:6px 8px;text-align:left;">Time</th>'
-      + '<th style="padding:6px 8px;text-align:left;">Email</th>'
-      + '<th style="padding:6px 8px;text-align:left;">User</th>'
-      + '<th style="padding:6px 8px;text-align:center;">Status</th>'
-      + '<th style="padding:6px 8px;text-align:left;">IP</th>'
-      + '<th style="padding:6px 8px;text-align:left;">Details</th>'
-      + '</tr>';
-    for (const log of logs) {{
-      const ts = (log.created_at || '').slice(0, 19).replace('T', ' ');
-      const statusIcon = log.success === 1 ? '✅' : '❌';
-      const statusColor = log.success === 1 ? 'var(--primary)' : 'var(--error)';
-      const userName = log.user_name || '—';
-      const details = log.details || '';
-      html += '<tr style="border-top:1px solid var(--border);">'
-        + '<td style="padding:6px 8px;color:var(--text-dim);white-space:nowrap;">' + ts + '</td>'
-        + '<td style="padding:6px 8px;">' + escHtml(log.email || '') + '</td>'
-        + '<td style="padding:6px 8px;color:var(--primary);">' + escHtml(userName) + '</td>'
-        + '<td style="padding:6px 8px;text-align:center;color:' + statusColor + ';">' + statusIcon + '</td>'
-        + '<td style="padding:6px 8px;color:var(--text-dim);font-size:0.9em;">' + escHtml(log.ip_address || '') + '</td>'
-        + '<td style="padding:6px 8px;color:var(--text-dim);font-size:0.9em;">' + escHtml(details) + '</td>'
-        + '</tr>';
-    }}
-    html += '</table>';
-    document.getElementById('sessionLogContent').innerHTML = html;
-  }} catch (err) {{
-    document.getElementById('sessionLogContent').innerHTML = '<div style="text-align:center;padding:20px;color:var(--error);">Error: ' + err.message + '</div>';
-  }}
-}}
-</script>
+  <div class="section-title"> Feedback Summary <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(agent learning)</span></div>
+  <div id="feedbackContainer" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:24px;">
+    <div id="feedbackContent" style="font-size:0.8em;color:var(--text-dim);text-align:center;padding:20px;">Loading feedback...</div>
+  </div>
 </body></html>"""
         # Build pending section
         if pending_users:
@@ -3648,6 +3582,29 @@ async function toggleSessionLogs() {{
         email = user['email']
         delete_user(target_user_id)
         logger.info(f"Admin deleted user: {email} (ID {target_user_id})")
+        return jsonify({'status': 'ok'})
+
+    @app.route('/admin/api/user-activity-all')
+    @require_admin
+    def admin_user_activity_all():
+        return jsonify({'activity': get_all_recent_activity(limit=100)})
+
+    @app.route('/admin/api/active-users')
+    @require_admin
+    def admin_active_users():
+        return jsonify({'active_count': get_active_users_count(minutes=30)})
+
+    @app.route('/api/feedback', methods=['POST'])
+    @require_login
+    def submit_feedback():
+        uid = get_user_id()
+        data = request.get_json()
+        if not data or data.get('rating') not in (-1, 1):
+            return jsonify({'status': 'error', 'error': 'Rating must be 1 or -1'}), 400
+        save_feedback(user_id=uid, rating=data['rating'], job_title=data.get('title',''), company=data.get('company',''), application_id=data.get('application_id'))
+        user = get_user_by_id(uid)
+        email = user['email'] if user else ''
+        log_activity(uid, email, 'feedback', f"Rated {'up' if data['rating'] == 1 else 'down'}")
         return jsonify({'status': 'ok'})
 
     @app.route('/admin/api/change-password', methods=['POST'])

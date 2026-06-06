@@ -92,6 +92,7 @@ def init_db():
 
     # Migration: add 'status' column if it doesn't exist (for databases created before this feature)
     _migrate_add_column("users", "status", "TEXT DEFAULT 'active'")
+    _migrate_add_column("users", "password_changed", "INTEGER DEFAULT 1")
 
     # Create password_reset_tokens table
     conn.executescript("""
@@ -119,6 +120,32 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_login_logs_user ON login_logs(user_id);
         CREATE INDEX IF NOT EXISTS idx_login_logs_time ON login_logs(created_at);
+
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            email TEXT NOT NULL,
+            action TEXT NOT NULL,
+            details TEXT DEFAULT '',
+            ip_address TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_user ON activity_log(user_id);
+        CREATE INDEX IF NOT EXISTS idx_activity_time ON activity_log(created_at);
+
+        CREATE TABLE IF NOT EXISTS job_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            application_id INTEGER,
+            job_title TEXT DEFAULT '',
+            company TEXT DEFAULT '',
+            rating INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_feedback_user ON job_feedback(user_id);
+        CREATE INDEX IF NOT EXISTS idx_feedback_rating ON job_feedback(rating);
     """)
     conn.commit()
 
@@ -174,10 +201,10 @@ def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
 
 
 def get_all_users() -> List[Dict[str, Any]]:
-    """Get all users (for admin)."""
+    """Get all users (for admin). Password hash excluded for security."""
     conn = get_db()
     rows = conn.execute(
-        "SELECT id, email, name, role, status, created_at FROM users ORDER BY created_at DESC"
+        "SELECT id, email, name, role, status, password_changed, created_at FROM users ORDER BY created_at DESC"
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -278,6 +305,119 @@ def update_user_name(user_id: int, name: str) -> bool:
     )
     conn.commit()
     return cursor.rowcount > 0
+
+
+# ── Password Changed Tracking ─────────────────────────────────────────────────
+
+def mark_password_changed(user_id: int) -> bool:
+    """Mark user has changed password (after forced reset)."""
+    conn = get_db()
+    c = conn.execute("UPDATE users SET password_changed = 1 WHERE id = ?", (user_id,))
+    conn.commit()
+    return c.rowcount > 0
+
+
+def mark_password_needs_change(user_id: int) -> bool:
+    """Mark user must change password on next login (admin reset or first login)."""
+    conn = get_db()
+    c = conn.execute("UPDATE users SET password_changed = 0 WHERE id = ?", (user_id,))
+    conn.commit()
+    return c.rowcount > 0
+
+
+def needs_password_change(user_id: int) -> bool:
+    """Check if user needs to change password on next login."""
+    conn = get_db()
+    row = conn.execute("SELECT password_changed FROM users WHERE id = ?", (user_id,)).fetchone()
+    return row is not None and row["password_changed"] == 0
+
+
+# ── Activity Tracking ─────────────────────────────────────────────────────────
+
+def log_activity(user_id: int, email: str, action: str, details: str = "", ip_address: str = ""):
+    """Log a user activity event."""
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO activity_log (user_id, email, action, details, ip_address) VALUES (?, ?, ?, ?, ?)",
+        (user_id, email, action, details, ip_address),
+    )
+    conn.commit()
+
+
+def get_user_activity(user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    """Get activity log for a specific user."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM activity_log WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+        (user_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_all_recent_activity(limit: int = 100) -> List[Dict[str, Any]]:
+    """Get all recent activity across all users (for admin)."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT a.*, u.name as user_name FROM activity_log a LEFT JOIN users u ON a.user_id = u.id ORDER BY a.created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_user_activity_stats(user_id: int) -> Dict[str, Any]:
+    """Get activity stats for a user (login count, saves, last active)."""
+    conn = get_db()
+    logins = conn.execute(
+        "SELECT COUNT(*) as c FROM activity_log WHERE user_id = ? AND action = 'login'", (user_id,)
+    ).fetchone()["c"]
+    saves = conn.execute(
+        "SELECT COUNT(*) as c FROM activity_log WHERE user_id = ? AND action = 'save_job'", (user_id,)
+    ).fetchone()["c"]
+    last = conn.execute(
+        "SELECT created_at FROM activity_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 1", (user_id,)
+    ).fetchone()
+    return {
+        "total_logins": logins,
+        "jobs_saved": saves,
+        "last_active": last["created_at"] if last else None,
+    }
+
+
+def get_active_users_count(minutes: int = 30) -> int:
+    """Count distinct users active in the last N minutes."""
+    from datetime import datetime, timedelta
+    conn = get_db()
+    cutoff = (datetime.utcnow() - timedelta(minutes=minutes)).isoformat()
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) as c FROM activity_log WHERE created_at > ?", (cutoff,)
+    ).fetchone()
+    return row["c"] if row else 0
+
+
+# ── Job Feedback ───────────────────────────────────────────────────────────────
+
+def save_feedback(user_id: int, rating: int, job_title: str = "", company: str = "", application_id: int = None):
+    """Save thumbs up/down feedback on a job result."""
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO job_feedback (user_id, application_id, job_title, company, rating) VALUES (?, ?, ?, ?, ?)",
+        (user_id, application_id, job_title, company, rating),
+    )
+    conn.commit()
+
+
+def get_feedback_summary() -> Dict[str, Any]:
+    """Get aggregate feedback stats for agent self-improvement."""
+    conn = get_db()
+    total = conn.execute("SELECT COUNT(*) as c FROM job_feedback").fetchone()["c"]
+    up = conn.execute("SELECT COUNT(*) as c FROM job_feedback WHERE rating = 1").fetchone()["c"]
+    down = conn.execute("SELECT COUNT(*) as c FROM job_feedback WHERE rating = -1").fetchone()["c"]
+    return {
+        "total": total,
+        "thumbs_up": up,
+        "thumbs_down": down,
+        "positivity_rate": round(up / total * 100, 1) if total > 0 else 0,
+    }
 
 
 # ── Password Reset Tokens ─────────────────────────────────────────────────────
