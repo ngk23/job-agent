@@ -33,7 +33,7 @@ from .auth import (
     DEFAULT_ADMIN_EMAIL,
     DEFAULT_ADMIN_PASSWORD,
 )
-from .notifier import notify_approved, notify_rejected
+from .notifier import notify_approved, notify_rejected, send_password_reset_email
 from .database import (
     init_db,
     get_user_applications,
@@ -55,6 +55,11 @@ from .database import (
     delete_user,
     get_user_by_email as db_get_user_by_email,
     get_user_by_id,
+    update_user_password,
+    create_password_reset_token,
+    get_user_by_reset_token,
+    use_password_reset_token,
+    cleanup_expired_tokens,
 )
 
 logger = logging.getLogger(__name__)
@@ -353,6 +358,9 @@ def create_dashboard_app(config: AppConfig):
   
   <div class="auth-link">
     Don't have an account? <a href="/signup">Sign up</a>
+  </div>
+  <div style="text-align:center;margin-top:10px;font-size:0.75em;">
+    <a href="/forgot-password" style="color:var(--text-dim);text-decoration:none;">Forgot password?</a>
   </div>
 </div>
 
@@ -2280,6 +2288,267 @@ function escHtml(str) {
         """Logout the current user."""
         logout_user()
         return jsonify({'status': 'ok'})
+
+    # ── Forgot / Reset Password Routes ──
+
+    @app.route('/forgot-password', methods=['GET', 'POST'])
+    def forgot_password():
+        """Forgot password page. GET shows form, POST sends reset email."""
+        if session.get('user_id'):
+            return redirect(url_for('index'))
+        if request.method == 'GET':
+            return render_template_string(FORGOT_PASSWORD_HTML)
+        # POST
+        data = request.get_json()
+        if not data or not data.get('email'):
+            return jsonify({'status': 'error', 'error': 'Email required'}), 400
+        email = data['email'].strip().lower()
+        # Always respond with same message for security (don't reveal if email exists)
+        # Clean up expired tokens on every request
+        cleanup_expired_tokens()
+        
+        user = db_get_user_by_email(email)
+        if user and user.get('status') == 'active':
+            token = create_password_reset_token(user['id'])
+            if token:
+                sent = send_password_reset_email(email, user['name'], token)
+                if sent:
+                    logger.info(f"Password reset email sent to {email}")
+                else:
+                    logger.info(f"Password reset email would be sent to {email} (no RESEND_API_KEY)")
+        return jsonify({
+            'status': 'ok',
+            'message': 'If that email exists and is active, a reset link has been sent. Check your inbox (and spam folder).'
+        })
+
+    @app.route('/reset-password/<token>', methods=['GET', 'POST'])
+    def reset_password(token):
+        """Reset password page. GET validates token, POST updates password."""
+        if session.get('user_id'):
+            return redirect(url_for('index'))
+        
+        # Validate token
+        user = get_user_by_reset_token(token)
+        if not user:
+            return render_template_string(r"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Job Agent - Invalid Link</title>
+<style>@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0a0f;--surface:#12121a;--border:#2a2a4a;--primary:#00ff41;--accent:#0ff;--text:#c8c8d0;--text-dim:#666;--error:#ff3355}
+body{font-family:'Share Tech Mono',monospace;background:var(--bg);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center}
+.box{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:40px;width:100%;max-width:420px;text-align:center}
+h1{color:var(--error);font-size:1.4em;margin-bottom:12px}
+p{color:var(--text-dim);font-size:0.85em;margin-bottom:20px;line-height:1.5}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="box">
+<h1>🔗 Invalid or Expired Link</h1>
+<p>This password reset link is invalid, expired, or has already been used.<br>Reset links are valid for 1 hour.</p>
+<a href="/forgot-password">Request a new reset link</a>
+</div>
+</body>
+</html>
+""")
+
+        if request.method == 'GET':
+            return render_template_string(RESET_PASSWORD_HTML)
+        
+        # POST - update password
+        data = request.get_json()
+        if not data or not data.get('password'):
+            return jsonify({'status': 'error', 'error': 'Password required'}), 400
+        
+        new_password = data['password']
+        if len(new_password) < 6:
+            return jsonify({'status': 'error', 'error': 'Password must be at least 6 characters'}), 400
+        
+        new_hash = hash_password(new_password)
+        ok = update_user_password(user['id'], new_hash)
+        if ok:
+            use_password_reset_token(token)
+            logger.info(f"Password reset completed for user {user['email']}")
+            return jsonify({'status': 'ok'})
+        return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
+
+    # ── Forgot Password HTML ──
+
+    FORGOT_PASSWORD_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Job Agent - Forgot Password</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root { --bg: #0a0a0f; --surface: #12121a; --surface2: #1a1a2e; --border: #2a2a4a; --primary: #00ff41; --accent: #0ff; --text: #c8c8d0; --text-dim: #666; --error: #ff3355; }
+  body { font-family: 'Share Tech Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .auth-box { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 40px; width: 100%; max-width: 420px; box-shadow: 0 0 60px rgba(0,255,65,0.05); }
+  .auth-box h1 { font-size: 1.8em; text-align: center; margin-bottom: 8px; background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 3px; text-transform: uppercase; }
+  .auth-box .subtitle { text-align: center; color: var(--text-dim); font-size: 0.8em; margin-bottom: 30px; letter-spacing: 1px; }
+  .auth-box label { display: block; font-size: 0.75em; color: var(--text-dim); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; margin-top: 16px; }
+  .auth-box input { width: 100%; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: 'Share Tech Mono', monospace; font-size: 0.9em; outline: none; transition: border-color 0.2s; }
+  .auth-box input:focus { border-color: var(--primary); box-shadow: 0 0 10px rgba(0,255,65,0.15); }
+  .auth-btn { width: 100%; padding: 14px; margin-top: 24px; background: transparent; border: 2px solid var(--primary); border-radius: 8px; color: var(--primary); font-family: 'Share Tech Mono', monospace; font-size: 1em; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; cursor: pointer; transition: all 0.3s; }
+  .auth-btn:hover { background: rgba(0,255,65,0.08); box-shadow: 0 0 20px rgba(0,255,65,0.2); }
+  .auth-msg { font-size: 0.8em; text-align: center; margin-top: 12px; padding: 8px; border-radius: 4px; display: none; }
+  .auth-msg.success { display: block; color: var(--primary); background: rgba(0,255,65,0.08); border: 1px solid rgba(0,255,65,0.2); }
+  .auth-msg.error { display: block; color: var(--error); background: rgba(255,51,85,0.08); border: 1px solid rgba(255,51,85,0.2); }
+  .auth-link { text-align: center; margin-top: 20px; font-size: 0.8em; color: var(--text-dim); }
+  .auth-link a { color: var(--accent); text-decoration: none; }
+  .auth-link a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="auth-box">
+  <h1>Job Agent</h1>
+  <div class="subtitle">Reset your password</div>
+  
+  <form id="forgotForm" onsubmit="return handleForgot(event)">
+    <label>Email</label>
+    <input type="email" id="forgotEmail" placeholder="you@example.com" required autocomplete="email">
+    <button type="submit" class="auth-btn">SEND RESET LINK</button>
+    <div class="auth-msg" id="forgotMsg"></div>
+  </form>
+  
+  <div class="auth-link">
+    <a href="/login">Back to login</a>
+  </div>
+</div>
+
+<script>
+async function handleForgot(e) {
+  e.preventDefault();
+  const email = document.getElementById('forgotEmail').value.trim();
+  const msg = document.getElementById('forgotMsg');
+  const btn = document.querySelector('.auth-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ SENDING...';
+  msg.className = 'auth-msg';
+  msg.style.display = 'none';
+  try {
+    const resp = await fetch('/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const data = await resp.json();
+    msg.textContent = data.message || 'If that email exists, a reset link has been sent.';
+    msg.className = 'auth-msg success';
+    msg.style.display = 'block';
+    document.getElementById('forgotEmail').value = '';
+  } catch (err) {
+    msg.textContent = 'Error: ' + err.message;
+    msg.className = 'auth-msg error';
+    msg.style.display = 'block';
+  }
+  btn.disabled = false;
+  btn.textContent = 'SEND RESET LINK';
+  return false;
+}
+</script>
+</body>
+</html>
+"""
+
+    RESET_PASSWORD_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Job Agent - Reset Password</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root { --bg: #0a0a0f; --surface: #12121a; --surface2: #1a1a2e; --border: #2a2a4a; --primary: #00ff41; --accent: #0ff; --text: #c8c8d0; --text-dim: #666; --error: #ff3355; }
+  body { font-family: 'Share Tech Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .auth-box { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 40px; width: 100%; max-width: 420px; box-shadow: 0 0 60px rgba(0,255,65,0.05); }
+  .auth-box h1 { font-size: 1.8em; text-align: center; margin-bottom: 8px; background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 3px; text-transform: uppercase; }
+  .auth-box .subtitle { text-align: center; color: var(--text-dim); font-size: 0.8em; margin-bottom: 30px; letter-spacing: 1px; }
+  .auth-box label { display: block; font-size: 0.75em; color: var(--text-dim); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; margin-top: 16px; }
+  .auth-box input { width: 100%; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: 'Share Tech Mono', monospace; font-size: 0.9em; outline: none; transition: border-color 0.2s; }
+  .auth-box input:focus { border-color: var(--primary); box-shadow: 0 0 10px rgba(0,255,65,0.15); }
+  .auth-btn { width: 100%; padding: 14px; margin-top: 24px; background: transparent; border: 2px solid var(--primary); border-radius: 8px; color: var(--primary); font-family: 'Share Tech Mono', monospace; font-size: 1em; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; cursor: pointer; transition: all 0.3s; }
+  .auth-btn:hover { background: rgba(0,255,65,0.08); box-shadow: 0 0 20px rgba(0,255,65,0.2); }
+  .auth-msg { font-size: 0.8em; text-align: center; margin-top: 12px; padding: 8px; border-radius: 4px; display: none; }
+  .auth-msg.success { display: block; color: var(--primary); background: rgba(0,255,65,0.08); border: 1px solid rgba(0,255,65,0.2); }
+  .auth-msg.error { display: block; color: var(--error); background: rgba(255,51,85,0.08); border: 1px solid rgba(255,51,85,0.2); }
+  .auth-link { text-align: center; margin-top: 20px; font-size: 0.8em; color: var(--text-dim); }
+  .auth-link a { color: var(--accent); text-decoration: none; }
+  .auth-link a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="auth-box">
+  <h1>Job Agent</h1>
+  <div class="subtitle" id="resetSubtitle">Enter your new password</div>
+  
+  <form id="resetForm" onsubmit="return handleReset(event)">
+    <label>New Password</label>
+    <input type="password" id="resetPassword" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password">
+    <button type="submit" class="auth-btn">UPDATE PASSWORD</button>
+    <div class="auth-msg" id="resetMsg"></div>
+  </form>
+  
+  <div class="auth-link" id="resetLink">
+    <a href="/login">Back to login</a>
+  </div>
+</div>
+
+<script>
+async function handleReset(e) {
+  e.preventDefault();
+  const password = document.getElementById('resetPassword').value;
+  const msg = document.getElementById('resetMsg');
+  if (password.length < 6) {
+    msg.textContent = 'Password must be at least 6 characters';
+    msg.className = 'auth-msg error';
+    msg.style.display = 'block';
+    return;
+  }
+  const btn = document.querySelector('.auth-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ UPDATING...';
+  msg.className = 'auth-msg';
+  msg.style.display = 'none';
+  try {
+    const path = window.location.pathname;
+    const resp = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      msg.textContent = '✅ Password updated! Redirecting to login...';
+      msg.className = 'auth-msg success';
+      msg.style.display = 'block';
+      document.getElementById('resetForm').style.display = 'none';
+      document.getElementById('resetSubtitle').textContent = 'Password updated!';
+      setTimeout(() => { window.location.href = '/login'; }, 2000);
+    } else {
+      msg.textContent = data.error || 'Failed to reset password';
+      msg.className = 'auth-msg error';
+      msg.style.display = 'block';
+    }
+  } catch (err) {
+    msg.textContent = 'Error: ' + err.message;
+    msg.className = 'auth-msg error';
+    msg.style.display = 'block';
+  }
+  btn.disabled = false;
+  btn.textContent = 'UPDATE PASSWORD';
+  return false;
+}
+</script>
+</body>
+</html>
+"""
 
     # ── Main Routes (require login) ──
 

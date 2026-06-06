@@ -93,6 +93,21 @@ def init_db():
     # Migration: add 'status' column if it doesn't exist (for databases created before this feature)
     _migrate_add_column("users", "status", "TEXT DEFAULT 'active'")
 
+    # Create password_reset_tokens table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token TEXT UNIQUE NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            used INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_reset_token ON password_reset_tokens(token);
+    """)
+    conn.commit()
+
 
 def _migrate_add_column(table: str, column: str, col_def: str):
     """Add a column to a table if it doesn't already exist (safe migration)."""
@@ -215,6 +230,66 @@ def update_user_password(user_id: int, password_hash: str) -> bool:
     )
     conn.commit()
     return cursor.rowcount > 0
+
+
+# ── Password Reset Tokens ─────────────────────────────────────────────────────
+
+def create_password_reset_token(user_id: int) -> Optional[str]:
+    """Create a password reset token for a user. Returns the token string."""
+    import secrets
+    from datetime import datetime, timedelta
+    conn = get_db()
+    # Delete any existing unused tokens for this user
+    conn.execute(
+        "DELETE FROM password_reset_tokens WHERE user_id = ? AND used = 0",
+        (user_id,),
+    )
+    conn.commit()
+    # Create new token (valid for 1 hour)
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.utcnow() + timedelta(hours=1)).isoformat()
+    conn.execute(
+        "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)",
+        (user_id, token, expires_at),
+    )
+    conn.commit()
+    return token
+
+
+def get_user_by_reset_token(token: str) -> Optional[Dict[str, Any]]:
+    """Get user by a valid (unused, not expired) password reset token."""
+    from datetime import datetime
+    conn = get_db()
+    row = conn.execute(
+        """SELECT user_id FROM password_reset_tokens 
+           WHERE token = ? AND used = 0 AND expires_at > ?""",
+        (token, datetime.utcnow().isoformat()),
+    ).fetchone()
+    if not row:
+        return None
+    return get_user_by_id(row["user_id"])
+
+
+def use_password_reset_token(token: str) -> bool:
+    """Mark a reset token as used."""
+    conn = get_db()
+    cursor = conn.execute(
+        "UPDATE password_reset_tokens SET used = 1 WHERE token = ?",
+        (token,),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def cleanup_expired_tokens():
+    """Delete expired password reset tokens."""
+    from datetime import datetime
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM password_reset_tokens WHERE expires_at < ?",
+        (datetime.utcnow().isoformat(),),
+    )
+    conn.commit()
 
 
 # ── Application Operations ────────────────────────────────────────────────────

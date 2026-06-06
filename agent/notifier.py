@@ -99,3 +99,25 @@ def notify_rejected(user_email: str, user_name: str) -> bool:
     """Send rejection notification email to a user."""
     body = REJECTED_BODY.format(name=user_name, app_url=APP_URL)
     return send_email(user_email, REJECTED_SUBJECT, body)
+
+
+PASSWORD_RESET_SUBJECT = "Reset your Job Agent password"
+PASSWORD_RESET_BODY = """
+Hi {name},
+
+We received a request to reset your password for your Job Agent account.
+
+Click the link below to reset your password (valid for 1 hour):
+{reset_url}
+
+If you did not request a password reset, you can safely ignore this email.
+
+— The Job Agent Team
+"""
+
+
+def send_password_reset_email(user_email: str, user_name: str, reset_token: str) -> bool:
+    """Send a password reset email with a secure token link."""
+    reset_url = f"{APP_URL}/reset-password/{reset_token}"
+    body = PASSWORD_RESET_BODY.format(name=user_name, reset_url=reset_url)
+    return send_email(user_email, PASSWORD_RESET_SUBJECT, body)
