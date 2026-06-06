@@ -1709,6 +1709,7 @@ async function handleSignup(e) {
     {% if user.role == 'admin' %}
     <a href="/admin">🛡️ Admin</a>
     {% endif %}
+    <a href="/change-password">🔑 Change PW</a>
     <button class="logout-btn" onclick="logoutUser()">🚪 Logout</button>
   </div>
 
