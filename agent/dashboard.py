@@ -4,6 +4,7 @@ Provides a cyberpunk-styled interface with authentication, CV upload,
 Run Agent button, real-time streaming output, results display, and admin panel.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -204,7 +205,18 @@ def create_dashboard_app(config: AppConfig):
     app = Flask(__name__)
     app.config['JSON_SORT_KEYS'] = False
     app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max upload
-    app.secret_key = os.urandom(24).hex()  # For Flask sessions
+    # Stable secret derived from app config for session persistence across restarts
+    stable_secret = os.environ.get('DASHBOARD_SECRET_KEY', '')
+    if not stable_secret:
+        stable_secret = hashlib.sha256(str(config.__dict__).encode()).hexdigest()[:32]
+    app.secret_key = stable_secret
+    # Ensure session cookies work correctly on HF Spaces behind proxy
+    app.config.update(
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE='Lax',
+        SESSION_COOKIE_DOMAIN=None,
+    )
 
     global _dashboard_data_dir
     _dashboard_data_dir = config.data_dir
@@ -3842,6 +3854,29 @@ async function handleReset(e) {
             if not result:
                 return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1 style="color:#ff3355;">Invalid credentials</h1><a href="/test-login" style="color:#0ff;">Try again</a></body></html>'
         return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;text-align:center;"><h1 style="color:#00ff41;">Login Successful!</h1><p>Session should be set.</p><a href="/" style="color:#0ff;">Go to Dashboard</a></body></html>'
+
+    @app.route('/admin/check-session')
+    def check_session():
+        """Debug: check if session is working."""
+        from flask import make_response
+        html = '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;">'
+        html += f'<h2>Session Debug</h2>'
+        html += f'<p>user_id: {session.get("user_id", "NOT SET")}</p>'
+        html += f'<p>user_role: {session.get("user_role", "NOT SET")}</p>'
+        html += f'<p>cookies: {dict(request.cookies)}</p>'
+        html += f'<h3>Actions:</h3>'
+        html += f'<a href="/test-login?email={DEFAULT_ADMIN_EMAIL}&password={DEFAULT_ADMIN_PASSWORD}" style="color:#0ff;display:block;margin:8px 0;">Auto-login via GET</a>'
+        html += f'<a href="/set-session-test" style="color:#0ff;display:block;margin:8px 0;">Set test session</a>'
+        html += '</body></html>'
+        return html
+
+    @app.route('/set-session-test')
+    def set_session_test():
+        """Set a test session value."""
+        session['test_value'] = 'hello'
+        from flask import make_response
+        resp = make_response(f'<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1>Session Set</h1><p>test_value=hello</p><a href="/admin/check-session" style="color:#0ff;">Check session</a></body></html>')
+        return resp
 
     return app
 
