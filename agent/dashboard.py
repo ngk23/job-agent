@@ -2499,6 +2499,9 @@ function escHtml(str) {
         if request.method == 'GET':
             return render_template_string(LOGIN_HTML)
         # POST
+        # Ensure the admin account exists and is active on every login
+        ensure_admin_exists()
+        
         data = request.get_json()
         if not data:
             return jsonify({'status': 'error', 'error': 'Invalid request'}), 400
