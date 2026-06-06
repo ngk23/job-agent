@@ -342,6 +342,135 @@ def create_dashboard_app(config: AppConfig):
     margin-top: 12px;
     display: none;
   }
+
+  /* ── Hacking Animation Overlay ── */
+  .hack-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.92);
+    z-index: 9999;
+    font-family: 'Share Tech Mono', monospace;
+    overflow: hidden;
+  }
+  .hack-overlay.active {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  #hackCanvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: -1;
+    opacity: 0.15;
+  }
+  .hack-terminal {
+    background: rgba(0, 20, 0, 0.6);
+    border: 1px solid var(--primary);
+    border-radius: 8px;
+    padding: 24px;
+    width: 90%;
+    max-width: 600px;
+    max-height: 70vh;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(0, 255, 65, 0.15);
+    position: relative;
+  }
+  .hack-terminal-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(0, 255, 65, 0.2);
+    margin-bottom: 12px;
+  }
+  .hack-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+  .hack-dot.red { background: #ff5f56; }
+  .hack-dot.yellow { background: #ffbd2e; }
+  .hack-dot.green { background: #27c93f; }
+  .hack-terminal-title {
+    color: var(--text-dim);
+    font-size: 0.8em;
+    letter-spacing: 2px;
+    margin-left: 8px;
+  }
+  .hack-output {
+    font-size: 0.85em;
+    line-height: 1.6;
+    color: var(--primary);
+    min-height: 200px;
+    max-height: 50vh;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .hack-output .line {
+    opacity: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    animation: hackFadeIn 0.3s ease forwards;
+  }
+  .hack-output .line.success { color: var(--primary); }
+  .hack-output .line.warning { color: var(--warning); }
+  .hack-output .line.error { color: var(--error); }
+  .hack-output .line.info { color: var(--accent); }
+  .hack-output .line.dim { color: var(--text-dim); }
+  .hack-output .line.highlight { color: var(--accent2, #f0f); }
+  @keyframes hackFadeIn {
+    to { opacity: 1; }
+  }
+  .hack-progress {
+    margin-top: 16px;
+    width: 100%;
+    height: 4px;
+    background: rgba(0, 255, 65, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .hack-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--primary), var(--accent));
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 10px rgba(0, 255, 65, 0.5);
+  }
+  .hack-cursor {
+    display: inline-block;
+    width: 8px;
+    height: 14px;
+    background: var(--primary);
+    animation: hackBlink 0.8s step-end infinite;
+    margin-left: 2px;
+    vertical-align: middle;
+  }
+  @keyframes hackBlink {
+    50% { opacity: 0; }
+  }
+  .hack-granted {
+    margin-top: 12px;
+    font-size: 0.9em;
+    text-align: center;
+    display: none;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+  .hack-granted.active {
+    display: block;
+    color: var(--primary);
+    text-shadow: 0 0 20px rgba(0, 255, 65, 0.5);
+    animation: hackPulse 0.5s ease-in-out 3;
+  }
+  @keyframes hackPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.05); }
+  }
+
 </style>
 </head>
 <body>
@@ -381,6 +510,7 @@ async function handleLogin(e) {
     });
     const data = await resp.json();
     if (data.status === 'ok') {
+      await showHackAnimation(email);
       window.location.href = '/';
     } else {
       errorEl.textContent = data.error || 'Login failed';
@@ -392,7 +522,102 @@ async function handleLogin(e) {
   }
   return false;
 }
+
+// ── Hacking Animation ──
+const HACK_LINES = [
+  { text: '[INIT] Establishing secure connection...', cls: 'info', delay: 100 },
+  { text: '[OK]  Handshake complete (TLS 1.3, 4096-bit RSA)', cls: 'success', delay: 200 },
+  { text: '[INIT] Authenticating identity...', cls: 'info', delay: 150 },
+  { text: '[OK]  Token validated', cls: 'success', delay: 180 },
+  { text: '[INIT] Scanning mainframe access points...', cls: 'info', delay: 120 },
+  { text: '[!]   Detected firewall: SKYNET-ASM v4.2', cls: 'warning', delay: 200 },
+  { text: '[INIT] Deploying bypass payload...', cls: 'info', delay: 150 },
+  { text: '[OK]  IPS/IDS evasion successful', cls: 'success', delay: 250 },
+  { text: '[INIT] Cracking credential vault...', cls: 'info', delay: 180 },
+  { text: '[OK]  Decryption key obtained', cls: 'success', delay: 200 },
+  { text: '[INIT] Injecting session token...', cls: 'info', delay: 150 },
+  { text: '[OK]  Privilege escalation: ROOT', cls: 'success', delay: 250 },
+  { text: '[INIT] Masking trace route...', cls: 'info', delay: 120 },
+  { text: '[OK]  Proxy chain: ACTIVE (14 hops)', cls: 'success', delay: 200 },
+  { text: '[INIT] Synchronizing data streams...', cls: 'info', delay: 150 },
+  { text: '[OK]  All channels encrypted', cls: 'success', delay: 180 },
+  { text: '[SYS] Connection secured. Redirecting...', cls: 'highlight', delay: 300 },
+];
+
+async function showHackAnimation(email) {
+  const overlay = document.getElementById('hackOverlay');
+  const output = document.getElementById('hackOutput');
+  const progressBar = document.getElementById('hackProgressBar');
+  const granted = document.getElementById('hackGranted');
+  
+  // Reset
+  overlay.classList.add('active');
+  output.innerHTML = '';
+  progressBar.style.width = '0%';
+  granted.classList.remove('active');
+  granted.style.display = 'none';
+  
+  // Start matrix rain on canvas
+  const canvas = document.getElementById('hackCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const cols = Math.floor(canvas.width / 14);
+  const drops = Array(cols).fill(1);
+  const chars = 'ABCDEF0123456789<>!@#$%^&*()_+-=[]{}|;:,./<>?~`';
+  
+  function drawMatrix() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#00ff41';
+    ctx.font = '14px monospace';
+    for (let i = 0; i < drops.length; i++) {
+      const char = chars[Math.floor(Math.random() * chars.length)];
+      ctx.fillText(char, i * 14, drops[i] * 14);
+      if (drops[i] * 14 > canvas.height && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+  }
+  const matrixInterval = setInterval(drawMatrix, 50);
+  
+  // Show lines with typing effect
+  for (let i = 0; i < HACK_LINES.length; i++) {
+    const line = HACK_LINES[i];
+    const div = document.createElement('div');
+    div.className = 'line ' + line.cls;
+    div.textContent = line.text;
+    output.appendChild(div);
+    output.scrollTop = output.scrollHeight;
+    const progress = Math.round(((i + 1) / HACK_LINES.length) * 100);
+    progressBar.style.width = progress + '%';
+    await new Promise(r => setTimeout(r, line.delay));
+  }
+  
+  // Flash ACCESS GRANTED
+  granted.style.display = 'block';
+  granted.classList.add('active');
+  
+  // Wait a moment then clean up
+  await new Promise(r => setTimeout(r, 800));
+  clearInterval(matrixInterval);
+  overlay.classList.remove('active');
+}
 </script>
+<!-- Hacking Animation Overlay -->
+<div class="hack-overlay" id="hackOverlay">
+  <canvas id="hackCanvas"></canvas>
+  <div class="hack-terminal">
+    <div class="hack-terminal-header">
+      <span class="hack-dot red"></span>
+      <span class="hack-dot yellow"></span>
+      <span class="hack-dot green"></span>
+      <span class="hack-terminal-title">ACCESS TERMINAL v2.1</span>
+    </div>
+    <div class="hack-output" id="hackOutput"></div>
+    <div class="hack-progress"><div class="hack-progress-bar" id="hackProgressBar"></div></div>
+    <div class="hack-granted" id="hackGranted">ACCESS GRANTED</div>
+  </div>
+</div>
 </body>
 </html>
 """
@@ -602,6 +827,21 @@ async function handleSignup(e) {
   return false;
 }
 </script>
+<!-- Hacking Animation Overlay -->
+<div class="hack-overlay" id="hackOverlay">
+  <canvas id="hackCanvas"></canvas>
+  <div class="hack-terminal">
+    <div class="hack-terminal-header">
+      <span class="hack-dot red"></span>
+      <span class="hack-dot yellow"></span>
+      <span class="hack-dot green"></span>
+      <span class="hack-terminal-title">ACCESS TERMINAL v2.1</span>
+    </div>
+    <div class="hack-output" id="hackOutput"></div>
+    <div class="hack-progress"><div class="hack-progress-bar" id="hackProgressBar"></div></div>
+    <div class="hack-granted" id="hackGranted">ACCESS GRANTED</div>
+  </div>
+</div>
 </body>
 </html>
 """
@@ -2227,6 +2467,21 @@ function escHtml(str) {
   return div.innerHTML;
 }
 </script>
+<!-- Hacking Animation Overlay -->
+<div class="hack-overlay" id="hackOverlay">
+  <canvas id="hackCanvas"></canvas>
+  <div class="hack-terminal">
+    <div class="hack-terminal-header">
+      <span class="hack-dot red"></span>
+      <span class="hack-dot yellow"></span>
+      <span class="hack-dot green"></span>
+      <span class="hack-terminal-title">ACCESS TERMINAL v2.1</span>
+    </div>
+    <div class="hack-output" id="hackOutput"></div>
+    <div class="hack-progress"><div class="hack-progress-bar" id="hackProgressBar"></div></div>
+    <div class="hack-granted" id="hackGranted">ACCESS GRANTED</div>
+  </div>
+</div>
 </body>
 </html>
 """
@@ -2363,6 +2618,21 @@ a:hover{text-decoration:underline}
 <p>This password reset link is invalid, expired, or has already been used.<br>Reset links are valid for 1 hour.</p>
 <a href="/forgot-password">Request a new reset link</a>
 </div>
+<!-- Hacking Animation Overlay -->
+<div class="hack-overlay" id="hackOverlay">
+  <canvas id="hackCanvas"></canvas>
+  <div class="hack-terminal">
+    <div class="hack-terminal-header">
+      <span class="hack-dot red"></span>
+      <span class="hack-dot yellow"></span>
+      <span class="hack-dot green"></span>
+      <span class="hack-terminal-title">ACCESS TERMINAL v2.1</span>
+    </div>
+    <div class="hack-output" id="hackOutput"></div>
+    <div class="hack-progress"><div class="hack-progress-bar" id="hackProgressBar"></div></div>
+    <div class="hack-granted" id="hackGranted">ACCESS GRANTED</div>
+  </div>
+</div>
 </body>
 </html>
 """)
@@ -2464,6 +2734,21 @@ async function handleForgot(e) {
   return false;
 }
 </script>
+<!-- Hacking Animation Overlay -->
+<div class="hack-overlay" id="hackOverlay">
+  <canvas id="hackCanvas"></canvas>
+  <div class="hack-terminal">
+    <div class="hack-terminal-header">
+      <span class="hack-dot red"></span>
+      <span class="hack-dot yellow"></span>
+      <span class="hack-dot green"></span>
+      <span class="hack-terminal-title">ACCESS TERMINAL v2.1</span>
+    </div>
+    <div class="hack-output" id="hackOutput"></div>
+    <div class="hack-progress"><div class="hack-progress-bar" id="hackProgressBar"></div></div>
+    <div class="hack-granted" id="hackGranted">ACCESS GRANTED</div>
+  </div>
+</div>
 </body>
 </html>
 """
@@ -2558,6 +2843,21 @@ async function handleReset(e) {
   return false;
 }
 </script>
+<!-- Hacking Animation Overlay -->
+<div class="hack-overlay" id="hackOverlay">
+  <canvas id="hackCanvas"></canvas>
+  <div class="hack-terminal">
+    <div class="hack-terminal-header">
+      <span class="hack-dot red"></span>
+      <span class="hack-dot yellow"></span>
+      <span class="hack-dot green"></span>
+      <span class="hack-terminal-title">ACCESS TERMINAL v2.1</span>
+    </div>
+    <div class="hack-output" id="hackOutput"></div>
+    <div class="hack-progress"><div class="hack-progress-bar" id="hackProgressBar"></div></div>
+    <div class="hack-granted" id="hackGranted">ACCESS GRANTED</div>
+  </div>
+</div>
 </body>
 </html>
 """
