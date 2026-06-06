@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 
 # Email configuration
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "noreply@jobagent.app")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
 APP_URL = os.environ.get("APP_URL", "https://gouklkrishan-job-agent.hf.space")
 
 # Base subject and body templates
@@ -92,12 +92,14 @@ def _send_via_resend(to_email: str, subject: str, body: str) -> bool:
 def notify_approved(user_email: str, user_name: str) -> bool:
     """Send approval notification email to a user."""
     body = APPROVED_BODY.format(name=user_name, app_url=APP_URL)
+    logger.info(f"Sending approval email to {user_email} via {EMAIL_FROM}")
     return send_email(user_email, APPROVED_SUBJECT, body)
 
 
 def notify_rejected(user_email: str, user_name: str) -> bool:
     """Send rejection notification email to a user."""
     body = REJECTED_BODY.format(name=user_name, app_url=APP_URL)
+    logger.info(f"Sending rejection email to {user_email} via {EMAIL_FROM}")
     return send_email(user_email, REJECTED_SUBJECT, body)
 
 
