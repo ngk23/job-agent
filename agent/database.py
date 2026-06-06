@@ -443,6 +443,14 @@ def get_all_applications(limit: int = 500) -> List[Dict[str, Any]]:
     return [_parse_app_row(r) for r in rows]
 
 
+def delete_application(application_id: int) -> bool:
+    """Delete a single application by ID. Returns True if deleted."""
+    conn = get_db()
+    cursor = conn.execute("DELETE FROM applications WHERE id = ?", (application_id,))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
 def clear_user_applications(user_id: int):
     """Clear all applications for a user."""
     conn = get_db()
@@ -500,6 +508,71 @@ def get_applied_urls(user_id: int) -> set:
 
 
 # ── Saved Jobs Operations ─────────────────────────────────────────────────────
+
+def save_job_with_data(user_id: int, job_data: Dict[str, Any]) -> Optional[int]:
+    """Save a job application and mark it as saved/bookmarked in one call.
+    Returns the application ID if successful, None on failure.
+    """
+    # First save the application data
+    app_id = save_application(user_id, job_data)
+    if not app_id:
+        return None
+    # Then mark it as saved
+    try:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO saved_jobs (user_id, application_id) VALUES (?, ?)",
+            (user_id, app_id),
+        )
+        conn.commit()
+        return app_id
+    except sqlite3.IntegrityError:
+        # Already saved, return the app_id anyway
+        return app_id
+
+
+def get_saved_applications(user_id: int) -> List[Dict[str, Any]]:
+    """Get all saved job applications with full data for a user."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT a.*, s.saved_at
+           FROM saved_jobs s
+           JOIN applications a ON s.application_id = a.id
+           WHERE s.user_id = ?
+           ORDER BY s.saved_at DESC""",
+        (user_id,),
+    ).fetchall()
+    return [_parse_app_row(r) for r in rows]
+
+
+def cleanup_old_saved_jobs(days: int = 7):
+    """Delete saved jobs (and their application data) older than the specified number of days."""
+    from datetime import datetime, timedelta
+    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    conn = get_db()
+    # Get IDs of applications to delete
+    rows = conn.execute(
+        """SELECT s.application_id
+           FROM saved_jobs s
+           WHERE s.saved_at < ?""",
+        (cutoff,),
+    ).fetchall()
+    app_ids = [r["application_id"] for r in rows]
+    if not app_ids:
+        return 0
+    # Delete from saved_jobs first
+    conn.execute(
+        "DELETE FROM saved_jobs WHERE saved_at < ?",
+        (cutoff,),
+    )
+    # Then delete orphaned applications (CASCADE will handle related data)
+    for app_id in app_ids:
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+    conn.commit()
+    logger = __import__('logging').getLogger(__name__)
+    logger.info(f"Cleaned up {len(app_ids)} saved job(s) older than {days} days")
+    return len(app_ids)
+
 
 def save_job(user_id: int, application_id: int) -> bool:
     """Save/bookmark a job. Returns True if newly saved."""

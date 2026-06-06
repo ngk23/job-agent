@@ -51,6 +51,9 @@ from .database import (
     clear_user_applications,
     clear_all_applications,
     save_application,
+    save_job_with_data,
+    get_saved_applications,
+    cleanup_old_saved_jobs,
     update_user_role,
     delete_user,
     get_user_by_email as db_get_user_by_email,
@@ -206,6 +209,8 @@ def create_dashboard_app(config: AppConfig):
     # Initialize database and ensure admin user exists
     init_db()
     ensure_admin_exists()
+    # Clean up expired saved jobs (older than 7 days)
+    cleanup_old_saved_jobs(days=7)
 
     tracker = ApplicationTracker(data_dir=config.data_dir)
 
@@ -2330,7 +2335,7 @@ function _renderJobList(jobs) {
     const isApplied = jobUrl && _appliedSet.has(jobUrl);
     const jobId = job.id;
     const isSaved = jobId && _savedSet.has(jobId);
-    const canSave = score >= 80 && jobId;
+    const canSave = score >= 80;
 
     let actionHtml;
     if (isApplied) {
@@ -2348,7 +2353,20 @@ function _renderJobList(jobs) {
       const savedClass = isSaved ? 'saved' : '';
       const starIcon = isSaved ? '⭐' : '☆';
       const saveText = isSaved ? 'Saved' : 'Save';
-      saveHtml = `<button class="history-save ${savedClass}" data-id="${jobId}" onclick="toggleSaveJob(${jobId}, this)">${starIcon} ${saveText}</button>`;
+      const escTitle = escHtml(job.job?.title || '');
+      const escCompany = escHtml(job.job?.company || '');
+      const escUrl = escHtml(job.job?.url || '');
+      const escPlatform = escHtml(job.job?.platform || 'unknown');
+      const escLocation = escHtml(job.job?.location || '');
+      const jobData = JSON.stringify({
+        timestamp: job.timestamp || '',
+        ai_score: score,
+        matching_skills: job.matching_skills || [],
+        concerns: job.concerns || [],
+        cover_letter: job.cover_letter || '',
+        job: { title: escTitle, company: escCompany, url: escUrl, platform: escPlatform, location: escLocation }
+      });
+      saveHtml = `<button class="history-save ${savedClass}" data-id="${jobId}" data-job='${jobData}' onclick="toggleSaveJob(this.dataset.id, this)">${starIcon} ${saveText}</button>`;
     } else {
       saveHtml = `<span class="history-save disabled">☆ Save (80%+ only)</span>`;
     }
@@ -2390,21 +2408,32 @@ async function toggleSaveJob(applicationId, btn) {
         _savedSet.delete(applicationId);
         btn.classList.remove('saved');
         btn.innerHTML = '☆ Save';
-        // Re-apply filters so the count updates
         applyFiltersAndSort();
       }
     } else {
+      // Send full job data from data-job attribute
+      let body;
+      if (btn.dataset.job) {
+        body = btn.dataset.job;
+      } else {
+        body = JSON.stringify({ application_id: applicationId });
+      }
       const resp = await fetch('/api/save-job', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ application_id: applicationId })
+        body: body
       });
       const data = await resp.json();
       if (data.status === 'ok') {
         _savedSet.add(applicationId);
         btn.classList.add('saved');
         btn.innerHTML = '⭐ Saved';
-        // Re-apply filters so the count updates
+        // Update data-id with the new application_id from backend
+        if (data.application_id) {
+          btn.dataset.id = data.application_id;
+          _savedSet.delete(applicationId);
+          _savedSet.add(data.application_id);
+        }
         applyFiltersAndSort();
       } else {
         alert(data.error || 'Failed to save job');
@@ -3117,14 +3146,11 @@ async function handleReset(e) {
     @require_login
     def get_history():
         uid = get_user_id()
+        jobs = []
         if uid:
-            # Sync any new data from JSON file (written by subprocess) into SQLite
-            _sync_json_to_db(uid, config.data_dir)
-            # Get from SQLite DB
-            apps = get_user_applications(uid, min_score=0)
-            # Convert to format frontend expects
-            jobs = []
-            for a in apps:
+            # 1. Load saved jobs from SQLite (user explicitly saved these)
+            saved_apps = get_saved_applications(uid)
+            for a in saved_apps:
                 jobs.append({
                     'timestamp': a.get('timestamp', ''),
                     'ai_score': a.get('ai_score', 0),
@@ -3140,6 +3166,42 @@ async function handleReset(e) {
                         'location': a.get('location', ''),
                     }
                 })
+            
+            # 2. Load current session results from JSON file (not persisted)
+            json_path = Path(config.data_dir) / "logs" / f"applications_{uid}.json"
+            if json_path.exists():
+                try:
+                    content = json_path.read_text().strip()
+                    if content:
+                        data = json.loads(content)
+                        if not isinstance(data, list):
+                            data = [data]
+                        for item in data:
+                            job_data = item.get('job', {})
+                            url = job_data.get('url', '')
+                            # Skip if already saved (avoid duplicates)
+                            if any(j.get('job', {}).get('url') == url for j in jobs if url):
+                                continue
+                            jobs.append({
+                                'timestamp': item.get('timestamp', ''),
+                                'ai_score': item.get('ai_score', 0),
+                                'matching_skills': item.get('matching_skills', []),
+                                'concerns': item.get('concerns', []),
+                                'cover_letter': item.get('cover_letter', ''),
+                                'id': None,  # Not saved yet
+                                'job': {
+                                    'title': job_data.get('title', 'Unknown'),
+                                    'company': job_data.get('company', 'Unknown'),
+                                    'url': url,
+                                    'platform': job_data.get('platform', 'unknown'),
+                                    'location': job_data.get('location', ''),
+                                }
+                            })
+                except Exception:
+                    pass
+            
+            # Sort by timestamp descending
+            jobs.sort(key=lambda j: j.get('timestamp', ''), reverse=True)
             return jsonify({'jobs': jobs})
         else:
             all_jobs = tracker.load_all()
@@ -3198,34 +3260,50 @@ async function handleReset(e) {
     @app.route('/api/save-job', methods=['POST'])
     @require_login
     def save_job_route():
-        """Save/bookmark a job. Only allowed for 80%+ scored jobs."""
+        """Save/bookmark a job. Accepts full job data and saves it."""
         data = request.get_json()
-        if not data or 'application_id' not in data:
-            return jsonify({'status': 'error', 'error': 'No application_id provided'}), 400
-        app_id = data['application_id']
+        if not data:
+            return jsonify({'status': 'error', 'error': 'No data provided'}), 400
         uid = get_user_id()
         
-        # Verify the job exists and is 80%+
-        apps = get_user_applications(uid)
-        target = next((a for a in apps if a.get('id') == app_id), None)
-        if not target:
-            return jsonify({'status': 'error', 'error': 'Application not found'}), 404
-        if (target.get('ai_score') or 0) < 80:
+        # Build app entry from submitted data
+        job_data = data.get('job', data)
+        score = data.get('ai_score') or data.get('score') or 0
+        if score < 80:
             return jsonify({'status': 'error', 'error': 'Only jobs with 80%+ match can be saved'}), 403
         
-        newly = db_save_job(uid, app_id)
-        return jsonify({'status': 'ok', 'newly_saved': newly})
+        app_entry = {
+            'timestamp': data.get('timestamp', ''),
+            'title': job_data.get('title', 'Unknown'),
+            'company': job_data.get('company', 'Unknown'),
+            'url': job_data.get('url', ''),
+            'platform': job_data.get('platform', 'unknown'),
+            'location': job_data.get('location', ''),
+            'ai_score': score,
+            'matching_skills': data.get('matching_skills', []),
+            'concerns': data.get('concerns', []),
+            'cover_letter': data.get('cover_letter', ''),
+            'job_description': job_data.get('description', ''),
+        }
+        app_id = save_job_with_data(uid, app_entry)
+        if not app_id:
+            return jsonify({'status': 'error', 'error': 'Failed to save job'}), 500
+        return jsonify({'status': 'ok', 'application_id': app_id})
 
     @app.route('/api/unsave-job', methods=['POST'])
     @require_login
     def unsave_job_route():
-        """Remove a saved/bookmarked job."""
+        """Remove a saved/bookmarked job and its application data."""
         data = request.get_json()
         if not data or 'application_id' not in data:
             return jsonify({'status': 'error', 'error': 'No application_id provided'}), 400
         app_id = data['application_id']
         uid = get_user_id()
         removed = db_unsave_job(uid, app_id)
+        # Also delete the application data since user doesn't want it anymore
+        if removed:
+            from .database import delete_application
+            delete_application(app_id)
         return jsonify({'status': 'ok', 'removed': removed})
 
     @app.route('/api/saved', methods=['GET'])
@@ -3600,54 +3678,6 @@ async function toggleSessionLogs() {{
     return app
 
 
-def _sync_json_to_db(uid: int, data_dir: str):
-    """Sync job results from per-user JSON file (written by subprocess) into SQLite.
-    This is called before querying history so results from the agent run appear.
-    """
-    json_path = Path(data_dir) / "logs" / f"applications_{uid}.json"
-    if not json_path.exists():
-        return
-    try:
-        content = json_path.read_text().strip()
-        if not content:
-            return
-        data = json.loads(content)
-        if not isinstance(data, list):
-            data = [data]
-        
-        # Check what's already in SQLite
-        existing = get_user_applications(uid, limit=99999)
-        existing_urls = {a.get('url') for a in existing if a.get('url')}
-        
-        imported = 0
-        for item in data:
-            job_data = item.get('job', {})
-            url = job_data.get('url', '')
-            if url and url in existing_urls:
-                continue  # Already in SQLite
-            
-            # Extract fields from the old JSON format
-            app_entry = {
-                'timestamp': item.get('timestamp', ''),
-                'title': job_data.get('title', 'Unknown'),
-                'company': job_data.get('company', 'Unknown'),
-                'url': url,
-                'platform': job_data.get('platform', 'unknown'),
-                'location': job_data.get('location', ''),
-                'ai_score': item.get('ai_score', 0),
-                'matching_skills': item.get('matching_skills', []),
-                'concerns': item.get('concerns', []),
-                'cover_letter': item.get('cover_letter', ''),
-                'job_description': job_data.get('description', ''),
-            }
-            if app_entry.get('ai_score', 0) > 0:  # Only sync scored jobs
-                save_application(uid, app_entry)
-                imported += 1
-        
-        if imported > 0:
-            logger.info(f"Synced {imported} job results from JSON to SQLite for user {uid}")
-    except Exception as e:
-        logger.error(f"Failed to sync JSON to SQLite for user {uid}: {e}")
 
 
 def _init_persistent_data(config: AppConfig):
