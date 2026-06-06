@@ -2715,7 +2715,24 @@ function escHtml(str) {
     <div class="stat-card"><div class="num">{len(users)}</div><div class="lbl">Users</div></div>
     <div class="stat-card warning"><div class="num">{pending_count}</div><div class="lbl">Pending ⏳</div></div>
   </div>
-  
+
+  <!-- Change Password Section -->
+  <div class="section-title">🔑 Change Admin Password</div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;margin-bottom:24px;">
+    <form id="changePwForm" onsubmit="return changePassword(event)" style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;">
+      <div>
+        <label style="display:block;font-size:0.75em;color:var(--text-dim);margin-bottom:4px;">Current Password</label>
+        <input type="password" id="currentPw" required style="padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Share Tech Mono',monospace;font-size:0.85em;outline:none;width:200px;">
+      </div>
+      <div>
+        <label style="display:block;font-size:0.75em;color:var(--text-dim);margin-bottom:4px;">New Password</label>
+        <input type="password" id="newPw" required minlength="6" placeholder="At least 6 characters" style="padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Share Tech Mono',monospace;font-size:0.85em;outline:none;width:200px;">
+      </div>
+      <button type="submit" style="padding:8px 20px;background:transparent;border:1px solid var(--primary);border-radius:4px;color:var(--primary);font-family:'Share Tech Mono',monospace;font-size:0.85em;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(0,255,65,0.08)'" onmouseout="this.style.background='transparent'">UPDATE PASSWORD</button>
+      <span id="pwMsg" style="font-size:0.8em;display:none;"></span>
+    </form>
+  </div>
+
   {{pending_section}}
   
   <div class="section-title">👥 All Users <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">({len(users)} total)</span></div>
@@ -2743,6 +2760,39 @@ function rejectUser(id) {{
   fetch('/admin/api/reject-user/' + id, {{ method: 'POST' }})
     .then(r => r.json())
     .then(d => {{ if (d.status === 'ok') location.reload(); else alert(d.error); }});
+}}
+function changePassword(e) {{
+  e.preventDefault();
+  const current = document.getElementById('currentPw').value;
+  const newPw = document.getElementById('newPw').value;
+  const msg = document.getElementById('pwMsg');
+  if (!current || !newPw) return;
+  if (newPw.length < 6) {{ msg.textContent = '⚠️ Min 6 characters'; msg.style.display = 'block'; msg.style.color = '#ff3355'; return; }}
+  msg.textContent = '⏳ Updating...';
+  msg.style.display = 'block';
+  msg.style.color = '#666';
+  fetch('/admin/api/change-password', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ current_password: current, new_password: newPw }})
+  }})
+  .then(r => r.json())
+  .then(d => {{
+    if (d.status === 'ok') {{
+      msg.textContent = '✅ Password updated successfully!';
+      msg.style.color = '#00ff41';
+      document.getElementById('currentPw').value = '';
+      document.getElementById('newPw').value = '';
+    }} else {{
+      msg.textContent = '⚠️ ' + (d.error || 'Failed');
+      msg.style.color = '#ff3355';
+    }}
+  }})
+  .catch(err => {{
+    msg.textContent = '⚠️ Error: ' + err.message;
+    msg.style.color = '#ff3355';
+  }});
+  return false;
 }}
 </script>
 </body></html>"""
@@ -2827,6 +2877,36 @@ function rejectUser(id) {{
     def admin_user_apps(target_user_id):
         apps = get_user_applications(target_user_id, limit=500)
         return jsonify({'applications': apps})
+
+    @app.route('/admin/api/change-password', methods=['POST'])
+    @require_admin
+    def admin_change_password():
+        """Change the current admin's password."""
+        data = request.get_json()
+        if not data:
+            return jsonify({'status': 'error', 'error': 'Invalid request'}), 400
+        
+        current = data.get('current_password', '')
+        new_password = data.get('new_password', '')
+        
+        if not current or not new_password:
+            return jsonify({'status': 'error', 'error': 'Both current and new password are required'}), 400
+        if len(new_password) < 6:
+            return jsonify({'status': 'error', 'error': 'New password must be at least 6 characters'}), 400
+        
+        # Verify current password
+        from .auth import verify_password, hash_password
+        user = get_current_user()
+        if not user or not verify_password(current, user.get('password_hash', '')):
+            return jsonify({'status': 'error', 'error': 'Current password is incorrect'}), 403
+        
+        # Update password
+        new_hash = hash_password(new_password)
+        ok = update_user_password(user['id'], new_hash)
+        if ok:
+            logger.info(f"Admin password changed for user {user['email']}")
+            return jsonify({'status': 'ok'})
+        return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
 
     return app
 

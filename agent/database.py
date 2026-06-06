@@ -206,6 +206,17 @@ def delete_user(user_id: int):
     conn.commit()
 
 
+def update_user_password(user_id: int, password_hash: str) -> bool:
+    """Update a user's password hash. Returns True if successful."""
+    conn = get_db()
+    cursor = conn.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        (password_hash, user_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
 # ── Application Operations ────────────────────────────────────────────────────
 
 def save_application(user_id: int, app_data: Dict[str, Any]) -> int:
