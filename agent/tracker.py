@@ -1,8 +1,10 @@
 """
 Application tracker for job applications.
+Supports per-user JSON files via user_id parameter.
 """
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -11,15 +13,32 @@ from .models import ApplicationResult, Job, AIResult
 
 
 class ApplicationTracker:
-    """Track and persist job application results."""
+    """Track and persist job application results.
     
-    def __init__(self, log_path: Optional[str] = None, data_dir: Optional[str] = None):
+    Supports per-user storage: if user_id is provided, saves to
+    applications_{user_id}.json to isolate each user's results.
+    When running as a subprocess, uses the USER_ID env var.
+    """
+    
+    def __init__(self, log_path: Optional[str] = None, data_dir: Optional[str] = None, user_id: Optional[int] = None):
+        # Auto-detect user_id from env if not provided (subprocess mode)
+        if user_id is None:
+            env_uid = os.environ.get("USER_ID", "")
+            user_id = int(env_uid) if env_uid.isdigit() else None
+        self.user_id = user_id
+        
         if log_path:
             self.log_path = Path(log_path)
         elif data_dir:
-            self.log_path = Path(data_dir) / "logs" / "applications.json"
+            if user_id:
+                self.log_path = Path(data_dir) / "logs" / f"applications_{user_id}.json"
+            else:
+                self.log_path = Path(data_dir) / "logs" / "applications.json"
         else:
-            self.log_path = Path("logs/applications.json")
+            if user_id:
+                self.log_path = Path(f"logs/applications_{user_id}.json")
+            else:
+                self.log_path = Path("logs/applications.json")
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
     
     def save(self, job: Job, ai_result: AIResult):

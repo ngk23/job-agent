@@ -1,7 +1,7 @@
 """
 Web GUI for Job Agent.
-Provides a cyberpunk-styled interface with CV upload, Run Agent button,
-real-time streaming output, and results display.
+Provides a cyberpunk-styled interface with authentication, CV upload,
+Run Agent button, real-time streaming output, results display, and admin panel.
 """
 
 import json
@@ -14,9 +14,44 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+from flask import Flask, jsonify, render_template_string, request, Response, send_file, redirect, url_for, session
+
 from .config import AppConfig
 from .tracker import ApplicationTracker
 from .utils import _ensure_dirs
+from .auth import (
+    login_user,
+    logout_user,
+    register_user,
+    get_current_user,
+    require_login,
+    require_admin,
+    is_admin,
+    get_user_id,
+    ensure_admin_exists,
+    hash_password,
+    DEFAULT_ADMIN_EMAIL,
+    DEFAULT_ADMIN_PASSWORD,
+)
+from .database import (
+    init_db,
+    get_user_applications,
+    get_all_applications,
+    get_applied_urls,
+    mark_applied,
+    save_job as db_save_job,
+    unsave_job as db_unsave_job,
+    get_saved_application_ids,
+    get_all_users,
+    get_stats,
+    clear_user_applications,
+    clear_all_applications,
+    save_application,
+    update_user_role,
+    delete_user,
+    get_user_by_email as db_get_user_by_email,
+    get_user_by_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +118,10 @@ def _run_agent_in_thread(cwd: str, api_key: str = ""):
     env["ANTHROPIC_API_KEY"] = api_key
     # Pass the selected region to the agent
     env["AGENT_LOCATION"] = _selected_region
+    # Pass the user ID so the tracker saves per-user files
+    uid = get_user_id()
+    if uid:
+        env["USER_ID"] = str(uid)
 
     cmd = [sys.executable, "-m", "agent", "run", "--headless"]
 
@@ -140,6 +179,7 @@ def create_dashboard_app(config: AppConfig):
     app = Flask(__name__)
     app.config['JSON_SORT_KEYS'] = False
     app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max upload
+    app.secret_key = os.urandom(24).hex()  # For Flask sessions
 
     global _dashboard_data_dir
     _dashboard_data_dir = config.data_dir
@@ -150,7 +190,391 @@ def create_dashboard_app(config: AppConfig):
     # On HF Spaces, copy initial files from project to /data if needed
     _init_persistent_data(config)
 
+    # Initialize database and ensure admin user exists
+    init_db()
+    ensure_admin_exists()
+
     tracker = ApplicationTracker(data_dir=config.data_dir)
+
+    # ── Login / Signup Page ──
+
+    LOGIN_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Job Agent - Login</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a2e;
+    --border: #2a2a4a;
+    --primary: #00ff41;
+    --accent: #0ff;
+    --text: #c8c8d0;
+    --text-dim: #666;
+    --error: #ff3355;
+  }
+  body {
+    font-family: 'Share Tech Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .auth-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 0 60px rgba(0,255,65,0.05);
+  }
+  .auth-box h1 {
+    font-size: 1.8em;
+    text-align: center;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+  .auth-box .subtitle {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.8em;
+    margin-bottom: 30px;
+    letter-spacing: 1px;
+  }
+  .auth-box label {
+    display: block;
+    font-size: 0.75em;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    margin-top: 16px;
+  }
+  .auth-box input {
+    width: 100%;
+    padding: 12px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.9em;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .auth-box input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 10px rgba(0,255,65,0.15);
+  }
+  .auth-btn {
+    width: 100%;
+    padding: 14px;
+    margin-top: 24px;
+    background: transparent;
+    border: 2px solid var(--primary);
+    border-radius: 8px;
+    color: var(--primary);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1em;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.3s;
+  }
+  .auth-btn:hover {
+    background: rgba(0,255,65,0.08);
+    box-shadow: 0 0 20px rgba(0,255,65,0.2);
+  }
+  .auth-error {
+    color: var(--error);
+    font-size: 0.8em;
+    text-align: center;
+    margin-top: 12px;
+    padding: 8px;
+    background: rgba(255,51,85,0.08);
+    border: 1px solid rgba(255,51,85,0.2);
+    border-radius: 4px;
+    display: none;
+  }
+  .auth-link {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 0.8em;
+    color: var(--text-dim);
+  }
+  .auth-link a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .auth-link a:hover {
+    text-decoration: underline;
+  }
+  .auth-msg {
+    color: var(--primary);
+    font-size: 0.8em;
+    text-align: center;
+    margin-top: 12px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+<div class="auth-box">
+  <h1>Job Agent</h1>
+  <div class="subtitle">Sign in to your account</div>
+  
+  <form id="loginForm" onsubmit="return handleLogin(event)">
+    <label>Email</label>
+    <input type="email" id="loginEmail" placeholder="you@example.com" required autocomplete="email">
+    <label>Password</label>
+    <input type="password" id="loginPassword" placeholder="••••••••" required autocomplete="current-password">
+    <button type="submit" class="auth-btn">SIGN IN</button>
+    <div class="auth-error" id="loginError"></div>
+  </form>
+  
+  <div class="auth-link">
+    Don't have an account? <a href="/signup">Sign up</a>
+  </div>
+</div>
+
+<script>
+async function handleLogin(e) {
+  e.preventDefault();
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errorEl = document.getElementById('loginError');
+  
+  try {
+    const resp = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      window.location.href = '/';
+    } else {
+      errorEl.textContent = data.error || 'Login failed';
+      errorEl.style.display = 'block';
+    }
+  } catch (err) {
+    errorEl.textContent = 'Error: ' + err.message;
+    errorEl.style.display = 'block';
+  }
+  return false;
+}
+</script>
+</body>
+</html>
+"""
+
+    SIGNUP_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Job Agent - Sign Up</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a2e;
+    --border: #2a2a4a;
+    --primary: #00ff41;
+    --accent: #0ff;
+    --text: #c8c8d0;
+    --text-dim: #666;
+    --error: #ff3355;
+  }
+  body {
+    font-family: 'Share Tech Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .auth-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 0 60px rgba(0,255,65,0.05);
+  }
+  .auth-box h1 {
+    font-size: 1.8em;
+    text-align: center;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+  .auth-box .subtitle {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.8em;
+    margin-bottom: 30px;
+    letter-spacing: 1px;
+  }
+  .auth-box label {
+    display: block;
+    font-size: 0.75em;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    margin-top: 16px;
+  }
+  .auth-box input {
+    width: 100%;
+    padding: 12px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.9em;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .auth-box input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 10px rgba(0,255,65,0.15);
+  }
+  .auth-btn {
+    width: 100%;
+    padding: 14px;
+    margin-top: 24px;
+    background: transparent;
+    border: 2px solid var(--primary);
+    border-radius: 8px;
+    color: var(--primary);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1em;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.3s;
+  }
+  .auth-btn:hover {
+    background: rgba(0,255,65,0.08);
+    box-shadow: 0 0 20px rgba(0,255,65,0.2);
+  }
+  .auth-error {
+    color: var(--error);
+    font-size: 0.8em;
+    text-align: center;
+    margin-top: 12px;
+    padding: 8px;
+    background: rgba(255,51,85,0.08);
+    border: 1px solid rgba(255,51,85,0.2);
+    border-radius: 4px;
+    display: none;
+  }
+  .auth-link {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 0.8em;
+    color: var(--text-dim);
+  }
+  .auth-link a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .auth-link a:hover {
+    text-decoration: underline;
+  }
+  .name-fields {
+    display: flex;
+    gap: 10px;
+  }
+  .name-fields > div { flex: 1; }
+</style>
+</head>
+<body>
+<div class="auth-box">
+  <h1>Job Agent</h1>
+  <div class="subtitle">Create your account</div>
+  
+  <form id="signupForm" onsubmit="return handleSignup(event)">
+    <label>Full Name</label>
+    <input type="text" id="signupName" placeholder="Your Name" required autocomplete="name">
+    <label>Email</label>
+    <input type="email" id="signupEmail" placeholder="you@example.com" required autocomplete="email">
+    <label>Password</label>
+    <input type="password" id="signupPassword" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password">
+    <button type="submit" class="auth-btn">CREATE ACCOUNT</button>
+    <div class="auth-error" id="signupError"></div>
+  </form>
+  
+  <div class="auth-link">
+    Already have an account? <a href="/login">Sign in</a>
+  </div>
+</div>
+
+<script>
+async function handleSignup(e) {
+  e.preventDefault();
+  const name = document.getElementById('signupName').value.trim();
+  const email = document.getElementById('signupEmail').value.trim();
+  const password = document.getElementById('signupPassword').value;
+  const errorEl = document.getElementById('signupError');
+  
+  if (!name || !email || !password) {
+    errorEl.textContent = 'All fields are required';
+    errorEl.style.display = 'block';
+    return false;
+  }
+  if (password.length < 6) {
+    errorEl.textContent = 'Password must be at least 6 characters';
+    errorEl.style.display = 'block';
+    return false;
+  }
+  
+  try {
+    const resp = await fetch('/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password })
+    });
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      window.location.href = '/';
+    } else {
+      errorEl.textContent = data.error || 'Sign up failed';
+      errorEl.style.display = 'block';
+    }
+  } catch (err) {
+    errorEl.textContent = 'Error: ' + err.message;
+    errorEl.style.display = 'block';
+  }
+  return false;
+}
+</script>
+</body>
+</html>
+"""
 
     # ── Main GUI Page ──
 
@@ -241,6 +665,81 @@ def create_dashboard_app(config: AppConfig):
   @keyframes pulse-dot {
     0%, 100% { opacity: 1; box-shadow: 0 0 6px var(--primary); }
     50% { opacity: 0.4; box-shadow: 0 0 2px var(--primary); }
+  }
+
+  /* ── User Info Bar ── */
+  .user-bar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.8em;
+  }
+  .user-bar .user-icon { font-size: 1.2em; }
+  .user-bar .user-name { color: var(--primary); font-weight: bold; }
+  .user-bar .user-email { color: var(--text-dim); font-size: 0.9em; }
+  .user-bar .user-spacer { flex: 1; }
+  .user-bar a {
+    color: var(--accent);
+    text-decoration: none;
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    transition: all 0.2s;
+  }
+  .user-bar a:hover {
+    border-color: var(--accent);
+    background: rgba(0,255,255,0.08);
+  }
+  .user-bar .logout-btn {
+    background: transparent;
+    border: 1px solid var(--text-dim);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.85em;
+    padding: 4px 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .user-bar .logout-btn:hover {
+    border-color: var(--error);
+    color: var(--error);
+  }
+
+  /* ── Save Button ── */
+  .history-save {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.72em;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .history-save:hover {
+    border-color: var(--warning);
+    color: var(--warning);
+    background: rgba(255,170,0,0.08);
+  }
+  .history-save.saved {
+    border-color: var(--warning);
+    color: var(--warning);
+    background: rgba(255,170,0,0.12);
+  }
+  .history-save.disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
   }
 
   /* ── API Key Section ── */
@@ -914,6 +1413,18 @@ def create_dashboard_app(config: AppConfig):
     <p><span class="status-dot"></span> AI-Powered Job Search &bull; CV Generator</p>
   </header>
 
+  <!-- User Info Bar -->
+  <div class="user-bar">
+    <span class="user-icon">👤</span>
+    <span class="user-name">{{ user.name }}</span>
+    <span class="user-email">{{ user.email }}</span>
+    <span class="user-spacer"></span>
+    {% if user.role == 'admin' %}
+    <a href="/admin">🛡️ Admin</a>
+    {% endif %}
+    <button class="logout-btn" onclick="logoutUser()">🚪 Logout</button>
+  </div>
+
   <!-- API Key Section -->
   <div class="api-key-section" id="apiKeySection">
     <label>🔑 API Key:</label>
@@ -1077,6 +1588,7 @@ def create_dashboard_app(config: AppConfig):
           <option value="all">All</option>
           <option value="unapplied">Unapplied</option>
           <option value="applied">Applied</option>
+          <option value="saved">Saved ⭐</option>
         </select>
       </div>
       <div class="filter-spacer"></div>
@@ -1411,6 +1923,12 @@ const historySection = document.getElementById('historySection');
 const historyContent = document.getElementById('historyContent');
 let _allHistoryJobs = [];
 let _appliedSet = new Set();
+let _savedSet = new Set();
+
+async function logoutUser() {
+  await fetch('/logout', { method: 'POST' });
+  window.location.href = '/login';
+}
 
 async function toggleHistory() {
   const btn = document.getElementById('historyToggle');
@@ -1427,14 +1945,17 @@ async function toggleHistory() {
 async function renderHistory() {
   historyContent.innerHTML = '<div class="history-loading"><span class="spinner"></span> Loading history...</div>';
   try {
-    // Fetch history and applied set in parallel
-    const [histResp, appliedResp] = await Promise.all([
+    // Fetch history, applied set, and saved set in parallel
+    const [histResp, appliedResp, savedResp] = await Promise.all([
       fetch('/api/history'),
       fetch('/api/applied'),
+      fetch('/api/saved'),
     ]);
     const data = await histResp.json();
     const appliedData = await appliedResp.json();
+    const savedData = await savedResp.json();
     _appliedSet = new Set(appliedData.applied || []);
+    _savedSet = new Set(savedData.saved || []);
     // Client-side safety: filter out any unscored jobs (score=0)
     _allHistoryJobs = (data.jobs || []).filter(j => (j.ai_score || 0) > 0);
 
@@ -1486,6 +2007,11 @@ function applyFiltersAndSort() {
     if (statusVal === 'applied' && !isApplied) return false;
     if (statusVal === 'unapplied' && isApplied) return false;
 
+    // Saved filter
+    const jobId = job.id;
+    const isSaved = jobId && _savedSet.has(jobId);
+    if (statusVal === 'saved' && !isSaved) return false;
+
     // Type filter (title-only vs full description)
     const concerns = job.concerns || [];
     const isTitleOnly = concerns.some(c => c && c.toLowerCase().includes('no job description'));
@@ -1529,6 +2055,9 @@ function _renderJobList(jobs) {
     const date = (job.timestamp || '').slice(0, 10);
     const jobUrl = job.job?.url || '';
     const isApplied = jobUrl && _appliedSet.has(jobUrl);
+    const jobId = job.id;
+    const isSaved = jobId && _savedSet.has(jobId);
+    const canSave = score >= 80 && jobId;
 
     let actionHtml;
     if (isApplied) {
@@ -1538,6 +2067,17 @@ function _renderJobList(jobs) {
       actionHtml = `<button class="history-apply" data-url="${safeUrl}" onclick="applyToJob(this.dataset.url, this)">🔗 Apply</button>`;
     } else {
       actionHtml = `<span class="history-apply no-url">🔗 No Link</span>`;
+    }
+
+    // Save/star button (only for 80%+)
+    let saveHtml;
+    if (canSave) {
+      const savedClass = isSaved ? 'saved' : '';
+      const starIcon = isSaved ? '⭐' : '☆';
+      const saveText = isSaved ? 'Saved' : 'Save';
+      saveHtml = `<button class="history-save ${savedClass}" data-id="${jobId}" onclick="toggleSaveJob(${jobId}, this)">${starIcon} ${saveText}</button>`;
+    } else {
+      saveHtml = `<span class="history-save disabled">☆ Save (80%+ only)</span>`;
     }
 
     html += `
@@ -1554,10 +2094,52 @@ function _renderJobList(jobs) {
             ${skills.map(s => `<span class="history-skill-tag">${escHtml(s)}</span>`).join('')}
           </div>
         </div>
-        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">${actionHtml}</div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+          ${saveHtml}
+          ${actionHtml}
+        </div>
       </div>`;
   }
   historyContent.innerHTML = html;
+}
+
+async function toggleSaveJob(applicationId, btn) {
+  const isSaved = _savedSet.has(applicationId);
+  try {
+    if (isSaved) {
+      const resp = await fetch('/api/unsave-job', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ application_id: applicationId })
+      });
+      const data = await resp.json();
+      if (data.status === 'ok') {
+        _savedSet.delete(applicationId);
+        btn.classList.remove('saved');
+        btn.innerHTML = '☆ Save';
+        // Re-apply filters so the count updates
+        applyFiltersAndSort();
+      }
+    } else {
+      const resp = await fetch('/api/save-job', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ application_id: applicationId })
+      });
+      const data = await resp.json();
+      if (data.status === 'ok') {
+        _savedSet.add(applicationId);
+        btn.classList.add('saved');
+        btn.innerHTML = '⭐ Saved';
+        // Re-apply filters so the count updates
+        applyFiltersAndSort();
+      } else {
+        alert(data.error || 'Failed to save job');
+      }
+    }
+  } catch (err) {
+    console.error('Toggle save failed:', err);
+  }
 }
 
 async function applyToJob(url, btn) {
@@ -1600,6 +2182,7 @@ async function clearHistory() {
     if (data.status === 'ok') {
       _allHistoryJobs = [];
       _appliedSet = new Set();
+      _savedSet = new Set();
       historyContent.innerHTML = '<div class="history-empty">History cleared. Run the agent to generate new results!</div>';
       document.getElementById('historyFilters').style.display = 'none';
     }
@@ -1618,11 +2201,68 @@ function escHtml(str) {
 </html>
 """
 
-    # ── Routes ──
+    # ── Auth Routes ──
+
+    @app.route('/login', methods=['GET', 'POST'])
+    def login_page():
+        """Login page. GET shows form, POST authenticates."""
+        if session.get('user_id'):
+            return redirect(url_for('index'))
+        if request.method == 'GET':
+            return render_template_string(LOGIN_HTML)
+        # POST
+        data = request.get_json()
+        if not data:
+            return jsonify({'status': 'error', 'error': 'Invalid request'}), 400
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+        if not email or not password:
+            return jsonify({'status': 'error', 'error': 'Email and password required'}), 400
+        user = login_user(email, password)
+        if not user:
+            return jsonify({'status': 'error', 'error': 'Invalid email or password'}), 401
+        logger.info(f"User logged in: {email}")
+        return jsonify({'status': 'ok', 'user': {'name': user['name'], 'email': user['email']}})
+
+    @app.route('/signup', methods=['GET', 'POST'])
+    def signup_page():
+        """Signup page. GET shows form, POST registers."""
+        if session.get('user_id'):
+            return redirect(url_for('index'))
+        if request.method == 'GET':
+            return render_template_string(SIGNUP_HTML)
+        # POST
+        data = request.get_json()
+        if not data:
+            return jsonify({'status': 'error', 'error': 'Invalid request'}), 400
+        name = data.get('name', '').strip()
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+        if not name or not email or not password:
+            return jsonify({'status': 'error', 'error': 'All fields required'}), 400
+        if len(password) < 6:
+            return jsonify({'status': 'error', 'error': 'Password must be at least 6 characters'}), 400
+        user = register_user(email, password, name)
+        if not user:
+            return jsonify({'status': 'error', 'error': 'Email already registered'}), 409
+        # Auto-login after signup
+        login_user(email, password)
+        logger.info(f"New user registered: {email}")
+        return jsonify({'status': 'ok', 'user': {'name': user['name'], 'email': user['email']}})
+
+    @app.route('/logout', methods=['POST'])
+    def logout():
+        """Logout the current user."""
+        logout_user()
+        return jsonify({'status': 'ok'})
+
+    # ── Main Routes (require login) ──
 
     @app.route('/')
+    @require_login
     def index():
-        return render_template_string(GUI_HTML)
+        user = get_current_user()
+        return render_template_string(GUI_HTML, user=user)
 
     @app.route('/healthz')
     def healthz():
@@ -1630,6 +2270,7 @@ function escHtml(str) {
         return jsonify({'status': 'ok'})
 
     @app.route('/upload', methods=['POST'])
+    @require_login
     def upload_file():
         global _run_complete
 
@@ -1645,9 +2286,14 @@ function escHtml(str) {
 
         global _uploaded_filename
 
-        # Save to data_dir for persistence (survives container restarts on HF Spaces)
-        save_path = Path(config.resume_save_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
+        # Save user-specific resume: data/logs/{user_id}_resume.pdf
+        uid = get_user_id()
+        resume_dir = Path(config.data_dir) / "logs"
+        resume_dir.mkdir(parents=True, exist_ok=True)
+        if uid:
+            save_path = resume_dir / f"resume_{uid}.pdf"
+        else:
+            save_path = Path(config.resume_save_path)
         file.save(str(save_path))
         _uploaded_filename = file.filename
 
@@ -1658,6 +2304,7 @@ function escHtml(str) {
         return jsonify({'status': 'ok', 'filename': _uploaded_filename})
 
     @app.route('/stop', methods=['POST'])
+    @require_login
     def stop_agent():
         """Stop the running agent subprocess."""
         global _run_process, _run_thread, _run_complete, _output_queue, _stop_requested
@@ -1666,13 +2313,10 @@ function escHtml(str) {
 
         if _run_process is not None:
             try:
-                # Try graceful termination first
                 _run_process.terminate()
-                # Give it 3 seconds to stop gracefully
                 _run_process.wait(timeout=3)
             except Exception:
                 try:
-                    # Force kill if terminate didn't work
                     _run_process.kill()
                     _run_process.wait(timeout=2)
                 except Exception:
@@ -1685,6 +2329,7 @@ function escHtml(str) {
         return jsonify({'status': 'ok'})
 
     @app.route('/set-region', methods=['POST'])
+    @require_login
     def set_region():
         global _selected_region
         data = request.get_json()
@@ -1698,6 +2343,7 @@ function escHtml(str) {
         return jsonify({'status': 'ok', 'region': region})
 
     @app.route('/set-api-key', methods=['POST'])
+    @require_login
     def set_api_key():
         global _gui_api_key
         data = request.get_json()
@@ -1709,10 +2355,17 @@ function escHtml(str) {
             return jsonify({'status': 'error', 'error': 'Invalid key format'}), 400
 
         _gui_api_key = key
+        
+        # Also save API key to user's profile in DB
+        uid = get_user_id()
+        if uid:
+            update_user_api_key(uid, key)
+        
         logger.info("API key configured via browser GUI")
         return jsonify({'status': 'ok'})
 
     @app.route('/run')
+    @require_login
     def run_agent():
         global _output_queue, _run_thread, _run_complete, _gui_api_key, _uploaded_filename
 
@@ -1724,17 +2377,14 @@ function escHtml(str) {
         _run_complete = False
         _stop_requested = False
 
-        # Use the project root as the working directory so Python can find the agent module
-        project_root = Path(__file__).resolve().parent.parent  # /app
+        project_root = Path(__file__).resolve().parent.parent
         work_dir = str(project_root)
 
         def generate():
             global _run_complete, _stop_requested
-            # Push initial status
             yield f"data: [SYSTEM] Starting agent with CV: {_uploaded_filename}\n\n"
             yield f"data: [SYSTEM] Analyzing resume, generating search keywords...\n\n"
 
-            # Use key from browser GUI first, then fall back to config env var
             api_key = _gui_api_key or config.anthropic_api_key
             thread = threading.Thread(
                 target=_run_agent_in_thread,
@@ -1747,12 +2397,10 @@ function escHtml(str) {
             while True:
                 try:
                     line = _output_queue.get(timeout=1)
-                    # Escape SSE formatting
                     safe_line = line.replace('\n', '\\n')
                     yield f"data: {safe_line}\n\n"
                 except queue.Empty:
                     if _run_complete:
-                        # Drain remaining
                         try:
                             while True:
                                 line = _output_queue.get_nowait()
@@ -1766,7 +2414,6 @@ function escHtml(str) {
                             yield "data: [SYSTEM] Agent completed.\n\n"
                         break
                     else:
-                        # Keep-alive
                         yield ": heartbeat\n\n"
 
         return Response(
@@ -1780,20 +2427,20 @@ function escHtml(str) {
         )
 
     @app.route('/results')
+    @require_login
     def get_results():
         data_dir = Path(config.data_dir)
         files = []
 
-        # List generated output files from data_dir
         for pattern in ['jobs_*.docx', 'cv_*.pdf']:
             for f in data_dir.glob(pattern):
                 files.append(f.name)
 
-        # Get tracker stats
-        stats = tracker.get_stats()
-
-        # Count high-match from the tracker
-        high_match = len(tracker.get_high_match(min_score=80))
+        uid = get_user_id()
+        # Use per-user tracker
+        user_tracker = ApplicationTracker(data_dir=config.data_dir, user_id=uid)
+        stats = user_tracker.get_stats()
+        high_match = len(user_tracker.get_high_match(min_score=80))
 
         return jsonify({
             'files': sorted(files),
@@ -1805,21 +2452,36 @@ function escHtml(str) {
         })
 
     @app.route('/api/clear-history', methods=['POST'])
+    @require_login
     def clear_history():
-        """Clear all scoring history."""
-        tracker.clear()
-        # Also clear applied jobs tracking
-        applied_path = _applied_path()
-        if applied_path.exists():
-            applied_path.unlink()
-        logger.info("Scoring history and applied jobs cleared by user")
+        """Clear user's scoring history."""
+        uid = get_user_id()
+        if uid:
+            # Clear from SQLite DB
+            clear_user_applications(uid)
+            # Clear per-user tracker JSON file
+            user_tracker = ApplicationTracker(data_dir=config.data_dir, user_id=uid)
+            user_tracker.clear()
+            # Also delete the JSON file to prevent re-import on next sync
+            json_path = Path(config.data_dir) / "logs" / f"applications_{uid}.json"
+            if json_path.exists():
+                json_path.unlink()
+        else:
+            tracker.clear()
+        logger.info(f"History cleared for user {uid}")
         return jsonify({'status': 'ok'})
 
     @app.route('/api/applied', methods=['GET'])
+    @require_login
     def get_applied():
+        uid = get_user_id()
+        if uid:
+            urls = get_applied_urls(uid)
+            return jsonify({'applied': sorted(urls)})
         return jsonify({'applied': sorted(_load_applied())})
 
     @app.route('/api/mark-applied', methods=['POST'])
+    @require_login
     def mark_applied():
         data = request.get_json()
         if not data or 'url' not in data:
@@ -1827,27 +2489,55 @@ function escHtml(str) {
         url = data['url'].strip()
         if not url:
             return jsonify({'status': 'error', 'error': 'Empty URL'}), 400
-        newly = _mark_applied(url)
+        
+        uid = get_user_id()
+        if uid:
+            newly = mark_applied(uid, url)
+        else:
+            newly = _mark_applied(url)
         logger.info(f"Job marked as applied: {url[:80]}...")
         return jsonify({'status': 'ok', 'newly_marked': newly})
 
     @app.route('/api/history')
+    @require_login
     def get_history():
-        all_jobs = tracker.load_all()
-        # Filter out unscored jobs (score=0 means no description was available)
-        all_jobs = [j for j in all_jobs if (j.get('ai_score') or 0) > 0]
-        # Return most recent first, limit to 200
-        all_jobs.reverse()
-        return jsonify({'jobs': all_jobs[:200]})
+        uid = get_user_id()
+        if uid:
+            # Sync any new data from JSON file (written by subprocess) into SQLite
+            _sync_json_to_db(uid, config.data_dir)
+            # Get from SQLite DB
+            apps = get_user_applications(uid, min_score=0)
+            # Convert to format frontend expects
+            jobs = []
+            for a in apps:
+                jobs.append({
+                    'timestamp': a.get('timestamp', ''),
+                    'ai_score': a.get('ai_score', 0),
+                    'matching_skills': a.get('matching_skills', []),
+                    'concerns': a.get('concerns', []),
+                    'cover_letter': a.get('cover_letter', ''),
+                    'id': a.get('id'),
+                    'job': {
+                        'title': a.get('title', 'Unknown'),
+                        'company': a.get('company', 'Unknown'),
+                        'url': a.get('url', ''),
+                        'platform': a.get('platform', 'unknown'),
+                        'location': a.get('location', ''),
+                    }
+                })
+            return jsonify({'jobs': jobs})
+        else:
+            all_jobs = tracker.load_all()
+            all_jobs = [j for j in all_jobs if (j.get('ai_score') or 0) > 0]
+            all_jobs.reverse()
+            return jsonify({'jobs': all_jobs[:200]})
 
     @app.route('/download/<path:filename>')
     def download_file(filename):
-        # Check data_dir first, then fallback to project root
         data_dir = Path(config.data_dir)
         filepath = data_dir / filename
         if filepath.exists() and filepath.is_file():
             return send_file(str(filepath), as_attachment=True)
-        # Fallback to project root
         project_root = Path(__file__).resolve().parent.parent
         filepath = project_root / filename
         if filepath.exists() and filepath.is_file():
@@ -1855,22 +2545,214 @@ function escHtml(str) {
         return jsonify({'error': 'File not found'}), 404
 
     @app.route('/status')
+    @require_login
     def status():
         s = _agent_status()
+        uid = get_user_id()
+        user = get_current_user()
         s['api_key_configured'] = bool(_gui_api_key or config.anthropic_api_key)
         s['uploaded_filename'] = _uploaded_filename
         s['selected_region'] = _selected_region
+        s['user'] = {
+            'id': uid,
+            'name': user['name'] if user else '',
+            'email': user['email'] if user else '',
+            'role': user['role'] if user else '',
+        } if user else None
         return jsonify(s)
 
     @app.route('/api/config')
+    @require_login
     def api_config():
+        uid = get_user_id()
+        user = get_current_user()
         return jsonify({
             'uploaded_filename': _uploaded_filename,
             'data_dir': config.data_dir,
             'is_hf_space': config.is_hf_space,
+            'user': {
+                'id': uid,
+                'name': user['name'] if user else '',
+                'email': user['email'] if user else '',
+                'role': user['role'] if user else '',
+            } if user else None,
         })
 
+    # ── Save / Bookmark Jobs (80%+ only) ──
+
+    @app.route('/api/save-job', methods=['POST'])
+    @require_login
+    def save_job_route():
+        """Save/bookmark a job. Only allowed for 80%+ scored jobs."""
+        data = request.get_json()
+        if not data or 'application_id' not in data:
+            return jsonify({'status': 'error', 'error': 'No application_id provided'}), 400
+        app_id = data['application_id']
+        uid = get_user_id()
+        
+        # Verify the job exists and is 80%+
+        apps = get_user_applications(uid)
+        target = next((a for a in apps if a.get('id') == app_id), None)
+        if not target:
+            return jsonify({'status': 'error', 'error': 'Application not found'}), 404
+        if (target.get('ai_score') or 0) < 80:
+            return jsonify({'status': 'error', 'error': 'Only jobs with 80%+ match can be saved'}), 403
+        
+        newly = db_save_job(uid, app_id)
+        return jsonify({'status': 'ok', 'newly_saved': newly})
+
+    @app.route('/api/unsave-job', methods=['POST'])
+    @require_login
+    def unsave_job_route():
+        """Remove a saved/bookmarked job."""
+        data = request.get_json()
+        if not data or 'application_id' not in data:
+            return jsonify({'status': 'error', 'error': 'No application_id provided'}), 400
+        app_id = data['application_id']
+        uid = get_user_id()
+        removed = db_unsave_job(uid, app_id)
+        return jsonify({'status': 'ok', 'removed': removed})
+
+    @app.route('/api/saved', methods=['GET'])
+    @require_login
+    def get_saved():
+        """Get list of saved application IDs for current user."""
+        uid = get_user_id()
+        saved_ids = get_saved_application_ids(uid)
+        return jsonify({'saved': sorted(saved_ids)})
+
+    # ── Admin Routes ──
+
+    @app.route('/admin')
+    @require_admin
+    def admin_panel():
+        """Admin panel page."""
+        users = get_all_users()
+        all_apps = get_all_applications(limit=200)
+        stats = get_stats()
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Job Agent - Admin</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap');
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  :root {{ --bg: #0a0a0f; --surface: #12121a; --surface2: #1a1a2e; --border: #2a2a4a; --primary: #00ff41; --accent: #0ff; --text: #c8c8d0; --text-dim: #666; }}
+  body {{ font-family: 'Share Tech Mono', monospace; background: var(--bg); color: var(--text); padding: 30px; }}
+  .container {{ max-width: 1200px; margin: 0 auto; }}
+  h1 {{ font-size: 1.8em; background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 30px; }}
+  .stats {{ display: flex; gap: 16px; margin-bottom: 30px; }}
+  .stat-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 24px; flex: 1; }}
+  .stat-card .num {{ font-size: 2em; color: var(--primary); }}
+  .stat-card .lbl {{ font-size: 0.75em; color: var(--text-dim); text-transform: uppercase; }}
+  table {{ width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 30px; }}
+  th {{ background: var(--surface2); color: var(--accent); padding: 10px 14px; text-align: left; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px; }}
+  td {{ padding: 10px 14px; border-top: 1px solid var(--border); font-size: 0.85em; }}
+  tr:hover td {{ background: var(--surface2); }}
+  .badge {{ padding: 2px 8px; border-radius: 4px; font-size: 0.75em; }}
+  .badge-admin {{ background: rgba(0,255,255,0.15); color: var(--accent); border: 1px solid rgba(0,255,255,0.3); }}
+  .badge-user {{ background: rgba(0,255,65,0.1); color: var(--primary); border: 1px solid rgba(0,255,65,0.2); }}
+  a {{ color: var(--accent); text-decoration: none; }}
+  a:hover {{ text-decoration: underline; }}
+  .nav {{ margin-bottom: 20px; }}
+  .nav a {{ margin-right: 16px; font-size: 0.85em; }}
+  .score {{ color: var(--primary); font-weight: bold; }}
+  .section-title {{ color: var(--accent); font-size: 0.9em; text-transform: uppercase; letter-spacing: 2px; margin: 20px 0 10px; }}
+</style></head>
+<body>
+<div class="container">
+  <div class="nav"><a href="/">← Dashboard</a> <a href="/logout" onclick="fetch('/logout',{{method:'POST'}}).then(()=>location='/login')">Logout</a></div>
+  <h1>🛡️ Admin Panel</h1>
+  
+  <div class="stats">
+    <div class="stat-card"><div class="num">{stats['total_jobs']}</div><div class="lbl">Total Jobs</div></div>
+    <div class="stat-card"><div class="num">{stats['avg_score']}</div><div class="lbl">Avg Score</div></div>
+    <div class="stat-card"><div class="num">{stats['high_match']}</div><div class="lbl">80%+ Match</div></div>
+    <div class="stat-card"><div class="num">{stats['saved_jobs']}</div><div class="lbl">Saved Jobs</div></div>
+    <div class="stat-card"><div class="num">{len(users)}</div><div class="lbl">Users</div></div>
+  </div>
+  
+  <div class="section-title">👥 Users</div>
+  <table>
+    <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Joined</th></tr>
+    {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td></tr>' for u in users)}
+  </table>
+  
+  <div class="section-title">📋 Recent Applications (all users)</div>
+  <table>
+    <tr><th>User</th><th>Title</th><th>Company</th><th>Score</th><th>Platform</th><th>Date</th></tr>
+    {"".join(f'<tr><td>{a.get("user_name","?")}</td><td>{a.get("title","?")}</td><td>{a.get("company","?")}</td><td class="score">{a.get("ai_score",0)}%</td><td>{a.get("platform","")}</td><td>{(a.get("timestamp") or "")[:10]}</td></tr>' for a in all_apps[:100])}
+  </table>
+</div></body></html>"""
+        return render_template_string(html)
+
+    @app.route('/admin/api/stats')
+    @require_admin
+    def admin_stats():
+        return jsonify(get_stats())
+
+    @app.route('/admin/api/users')
+    @require_admin
+    def admin_users():
+        return jsonify({'users': get_all_users()})
+
+    @app.route('/admin/api/user-apps/<int:target_user_id>')
+    @require_admin
+    def admin_user_apps(target_user_id):
+        apps = get_user_applications(target_user_id, limit=500)
+        return jsonify({'applications': apps})
+
     return app
+
+
+def _sync_json_to_db(uid: int, data_dir: str):
+    """Sync job results from per-user JSON file (written by subprocess) into SQLite.
+    This is called before querying history so results from the agent run appear.
+    """
+    json_path = Path(data_dir) / "logs" / f"applications_{uid}.json"
+    if not json_path.exists():
+        return
+    try:
+        content = json_path.read_text().strip()
+        if not content:
+            return
+        data = json.loads(content)
+        if not isinstance(data, list):
+            data = [data]
+        
+        # Check what's already in SQLite
+        existing = get_user_applications(uid, limit=99999)
+        existing_urls = {a.get('url') for a in existing if a.get('url')}
+        
+        imported = 0
+        for item in data:
+            job_data = item.get('job', {})
+            url = job_data.get('url', '')
+            if url and url in existing_urls:
+                continue  # Already in SQLite
+            
+            # Extract fields from the old JSON format
+            app_entry = {
+                'timestamp': item.get('timestamp', ''),
+                'title': job_data.get('title', 'Unknown'),
+                'company': job_data.get('company', 'Unknown'),
+                'url': url,
+                'platform': job_data.get('platform', 'unknown'),
+                'location': job_data.get('location', ''),
+                'ai_score': item.get('ai_score', 0),
+                'matching_skills': item.get('matching_skills', []),
+                'concerns': item.get('concerns', []),
+                'cover_letter': item.get('cover_letter', ''),
+                'job_description': job_data.get('description', ''),
+            }
+            if app_entry.get('ai_score', 0) > 0:  # Only sync scored jobs
+                save_application(uid, app_entry)
+                imported += 1
+        
+        if imported > 0:
+            logger.info(f"Synced {imported} job results from JSON to SQLite for user {uid}")
+    except Exception as e:
+        logger.error(f"Failed to sync JSON to SQLite for user {uid}: {e}")
 
 
 def _init_persistent_data(config: AppConfig):
