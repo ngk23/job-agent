@@ -210,10 +210,12 @@ def get_all_users() -> List[Dict[str, Any]]:
 
 
 def approve_user(user_id: int) -> bool:
-    """Approve a pending user. Returns True if successful."""
+    """Approve a pending user. Returns True if successful.
+    Explicitly sets role='user' to prevent accidental admin upgrades.
+    """
     conn = get_db()
     cursor = conn.execute(
-        "UPDATE users SET status = 'active' WHERE id = ? AND status = 'pending'",
+        "UPDATE users SET status = 'active', role = 'user' WHERE id = ? AND status = 'pending'",
         (user_id,),
     )
     conn.commit()

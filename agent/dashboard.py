@@ -3643,6 +3643,77 @@ async function handleReset(e) {
   <div id="feedbackContainer" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:24px;">
     <div id="feedbackContent" style="font-size:0.8em;color:var(--text-dim);text-align:center;padding:20px;">Loading feedback...</div>
   </div>
+  </div>
+<script>
+// Admin Panel JS
+async function deleteUser(userId) {{
+  if (!confirm('Delete user ID ' + userId + '? This cannot be undone.')) return;
+  try {{
+    const resp = await fetch('/admin/api/delete-user/' + userId, {{ method: 'POST' }});
+    const data = await resp.json();
+    if (data.status === 'ok') {{ location.reload(); }}
+    else {{ alert('Failed: ' + (data.error || 'Unknown error')); }}
+  }} catch (err) {{ alert('Error: ' + err.message); }}
+}}
+
+async function resetUserPassword(userId) {{
+  if (!confirm('Reset password for user ID ' + userId + '?')) return;
+  try {{
+    const resp = await fetch('/admin/api/reset-user-password/' + userId, {{ method: 'POST' }});
+    const data = await resp.json();
+    if (data.status === 'ok') {{ alert('Password reset'); }}
+    else {{ alert('Failed: ' + (data.error || 'Unknown error')); }}
+  }} catch (err) {{ alert('Error: ' + err.message); }}
+}}
+
+async function showUserActivity(userId) {{
+  const el = document.getElementById('recentActivityContent');
+  if (!el) return;
+  el.innerHTML = 'Loading...';
+  try {{
+    const resp = await fetch('/admin/api/user-activity/' + userId);
+    const data = await resp.json();
+    if (data.activity && data.activity.length > 0) {{
+      let html = '<table style="width:100%;border-collapse:collapse;font-size:0.8em;">';
+      for (const a of data.activity) {{
+        html += '<tr><td style="padding:4px 8px;border-bottom:1px solid rgba(255,255,255,0.05);">' + escHtml(a.action) + '</td>'
+          + '<td style="padding:4px 8px;border-bottom:1px solid rgba(255,255,255,0.05);">' + escHtml(a.details || '') + '</td>'
+          + '<td style="padding:4px 8px;border-bottom:1px solid rgba(255,255,255,0.05);">' + (a.created_at || '').slice(0, 16) + '</td></tr>';
+      }}
+      html += '</table>';
+      el.innerHTML = html;
+    }} else {{
+      el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim);">No activity found.</div>';
+    }}
+  }} catch (err) {{ el.innerHTML = '<div style="color:var(--error);padding:10px;">Error</div>'; }}
+}}
+
+async function approveUser(userId) {{
+  try {{
+    const resp = await fetch('/admin/api/approve-user/' + userId, {{ method: 'POST' }});
+    const data = await resp.json();
+    if (data.status === 'ok') {{ location.reload(); }}
+    else {{ alert('Failed: ' + (data.error || 'Unknown error')); }}
+  }} catch (err) {{ alert('Error: ' + err.message); }}
+}}
+
+async function rejectUser(userId) {{
+  if (!confirm('Reject user ID ' + userId + '?')) return;
+  try {{
+    const resp = await fetch('/admin/api/reject-user/' + userId, {{ method: 'POST' }});
+    const data = await resp.json();
+    if (data.status === 'ok') {{ location.reload(); }}
+    else {{ alert('Failed: ' + (data.error || 'Unknown error')); }}
+  }} catch (err) {{ alert('Error: ' + err.message); }}
+}}
+
+function escHtml(str) {{
+  var d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}}
+</script>
+
 </body></html>"""
         # Build pending section
         if pending_users:

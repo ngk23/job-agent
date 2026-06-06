@@ -176,6 +176,8 @@ def ensure_admin_exists():
     # Check if the admin account exists but has wrong status/role
     admin = get_user_by_email(DEFAULT_ADMIN_EMAIL)
     if admin:
+        # IMPORTANT: Only the default admin email gets upgraded
+        # Regular users should never be made admin
         # Ensure admin is active and has correct role
         if admin.get("role") != "admin":
             update_user_role(admin["id"], "admin")
