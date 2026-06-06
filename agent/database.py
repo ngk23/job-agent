@@ -105,6 +105,20 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_reset_token ON password_reset_tokens(token);
+
+        CREATE TABLE IF NOT EXISTS login_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            email TEXT NOT NULL,
+            ip_address TEXT DEFAULT '',
+            user_agent TEXT DEFAULT '',
+            success INTEGER DEFAULT 0,
+            details TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_login_logs_user ON login_logs(user_id);
+        CREATE INDEX IF NOT EXISTS idx_login_logs_time ON login_logs(created_at);
     """)
     conn.commit()
 
@@ -290,6 +304,50 @@ def cleanup_expired_tokens():
         (datetime.utcnow().isoformat(),),
     )
     conn.commit()
+
+
+# ── Login Logs ───────────────────────────────────────────────────────────────
+
+def log_login_attempt(
+    email: str,
+    success: bool,
+    user_id: Optional[int] = None,
+    ip_address: str = "",
+    user_agent: str = "",
+    details: str = "",
+):
+    """Record a login attempt in the login_logs table."""
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO login_logs (user_id, email, ip_address, user_agent, success, details)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (user_id, email, ip_address, user_agent, 1 if success else 0, details),
+    )
+    conn.commit()
+
+
+def get_login_logs(limit: int = 200) -> List[Dict[str, Any]]:
+    """Get all login logs with user info (for admin)."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT l.*, u.name as user_name, u.role as user_role
+           FROM login_logs l
+           LEFT JOIN users u ON l.user_id = u.id
+           ORDER BY l.created_at DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_login_logs_for_user(user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    """Get login logs for a specific user."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM login_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+        (user_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ── Application Operations ────────────────────────────────────────────────────

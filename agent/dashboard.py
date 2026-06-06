@@ -60,6 +60,8 @@ from .database import (
     get_user_by_reset_token,
     use_password_reset_token,
     cleanup_expired_tokens,
+    log_login_attempt,
+    get_login_logs,
 )
 
 logger = logging.getLogger(__name__)
@@ -2250,12 +2252,22 @@ function escHtml(str) {
         # Check if result is an error dict (pending/rejected) or actual user
         if isinstance(result, dict) and result.get('error'):
             if result['error'] == 'pending':
+                log_login_attempt(email=email, success=False, details='pending approval', ip_address=request.remote_addr or '', user_agent=request.user_agent.string if request.user_agent else '')
                 return jsonify({'status': 'error', 'error': '⏳ Your account is pending admin approval. Please wait for an admin to activate it.'}), 403
             elif result['error'] == 'rejected':
+                log_login_attempt(email=email, success=False, details='rejected', ip_address=request.remote_addr or '', user_agent=request.user_agent.string if request.user_agent else '')
                 return jsonify({'status': 'error', 'error': '❌ Your account registration was rejected by the admin.'}), 403
         if not result:
             return jsonify({'status': 'error', 'error': 'Invalid email or password'}), 401
         logger.info(f"User logged in: {email}")
+        # Log successful login
+        log_login_attempt(
+            email=email,
+            success=True,
+            user_id=result.get('id'),
+            ip_address=request.remote_addr or '',
+            user_agent=request.user_agent.string if request.user_agent else '',
+        )
         return jsonify({'status': 'ok', 'user': {'name': result['name'], 'email': result['email']}})
 
     @app.route('/signup', methods=['GET', 'POST'])
@@ -3012,6 +3024,16 @@ async function handleReset(e) {
     {"".join(f'<tr><td>{u["id"]}</td><td>{u["name"]}</td><td>{u["email"]}</td><td><span class="badge badge-{"admin" if u["role"]=="admin" else "user"}">{u["role"]}</span></td><td><span class="badge badge-{"pending" if u.get("status")=="pending" else "user"}">{u.get("status","active")}</span></td><td>{u["created_at"][:10] if u.get("created_at") else ""}</td><td>{"<button class=\"btn-reset\" onclick=\"resetUserPassword("+str(u["id"])+")\">🔑 Reset Pw</button>" if u["role"]!="admin" else ""}</td></tr>' for u in users)}
   </table>
   
+  <div class="section-title">🕐 Session Logs <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(recent 200 logins)</span></div>
+  <div style="margin-bottom:12px;">
+    <button onclick="toggleSessionLogs()" style="padding:6px 16px;background:transparent;border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:0.8em;cursor:pointer;transition:all 0.2s;">
+      📋 Show Session Logs
+    </button>
+  </div>
+  <div id="sessionLogSection" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:24px;overflow-x:auto;">
+    <div id="sessionLogContent" style="font-size:0.8em;color:var(--text-dim);text-align:center;padding:20px;">Loading...</div>
+  </div>
+
   <div class="section-title">📋 Recent Applications <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(all users)</span></div>
   <table>
     <tr><th>User</th><th>Title</th><th>Company</th><th>Score</th><th>Platform</th><th>Date</th></tr>
@@ -3076,6 +3098,64 @@ function changePassword(e) {{
     msg.style.color = '#ff3355';
   }});
   return false;
+}}
+
+let _sessionLogsVisible = false;
+async function toggleSessionLogs() {{
+  const section = document.getElementById('sessionLogSection');
+  const btn = event.target;
+  if (_sessionLogsVisible) {{
+    section.style.display = 'none';
+    btn.textContent = '📋 Show Session Logs';
+    _sessionLogsVisible = false;
+    return;
+  }}
+  section.style.display = 'block';
+  btn.textContent = '📋 Hide Session Logs';
+  _sessionLogsVisible = true;
+  document.getElementById('sessionLogContent').innerHTML = '<span class="spinner" style="display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:middle;margin-right:8px;"></span> Loading...';
+  try {{
+    const resp = await fetch('/admin/api/session-logs');
+    const data = await resp.json();
+    const logs = data.logs || [];
+    if (logs.length === 0) {{
+      document.getElementById('sessionLogContent').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim);">No login records yet.</div>';
+      return;
+    }}
+    const failedCount = logs.filter(l => l.success === 0).length;
+    let html = '<div style="margin-bottom:10px;display:flex;gap:16px;flex-wrap:wrap;">'
+      + '<span style="color:var(--accent);font-size:0.85em;">Total Logins: <strong style="color:var(--text);">' + logs.length + '</strong></span>'
+      + '<span style="color:var(--warning);font-size:0.85em;">Failed: <strong style="color:var(--error);">' + failedCount + '</strong></span>'
+      + '</div>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:0.8em;">'
+      + '<tr style="background:var(--surface2);color:var(--accent);font-size:0.75em;text-transform:uppercase;letter-spacing:1px;">'
+      + '<th style="padding:6px 8px;text-align:left;">Time</th>'
+      + '<th style="padding:6px 8px;text-align:left;">Email</th>'
+      + '<th style="padding:6px 8px;text-align:left;">User</th>'
+      + '<th style="padding:6px 8px;text-align:center;">Status</th>'
+      + '<th style="padding:6px 8px;text-align:left;">IP</th>'
+      + '<th style="padding:6px 8px;text-align:left;">Details</th>'
+      + '</tr>';
+    for (const log of logs) {{
+      const ts = (log.created_at || '').slice(0, 19).replace('T', ' ');
+      const statusIcon = log.success === 1 ? '✅' : '❌';
+      const statusColor = log.success === 1 ? 'var(--primary)' : 'var(--error)';
+      const userName = log.user_name || '—';
+      const details = log.details || '';
+      html += '<tr style="border-top:1px solid var(--border);">'
+        + '<td style="padding:6px 8px;color:var(--text-dim);white-space:nowrap;">' + ts + '</td>'
+        + '<td style="padding:6px 8px;">' + escHtml(log.email || '') + '</td>'
+        + '<td style="padding:6px 8px;color:var(--primary);">' + escHtml(userName) + '</td>'
+        + '<td style="padding:6px 8px;text-align:center;color:' + statusColor + ';">' + statusIcon + '</td>'
+        + '<td style="padding:6px 8px;color:var(--text-dim);font-size:0.9em;">' + escHtml(log.ip_address || '') + '</td>'
+        + '<td style="padding:6px 8px;color:var(--text-dim);font-size:0.9em;">' + escHtml(details) + '</td>'
+        + '</tr>';
+    }}
+    html += '</table>';
+    document.getElementById('sessionLogContent').innerHTML = html;
+  }} catch (err) {{
+    document.getElementById('sessionLogContent').innerHTML = '<div style="text-align:center;padding:20px;color:var(--error);">Error: ' + err.message + '</div>';
+  }}
 }}
 </script>
 </body></html>"""
