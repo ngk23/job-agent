@@ -94,6 +94,7 @@ def init_db():
     # Migration: add 'status' column if it doesn't exist (for databases created before this feature)
     _migrate_add_column("users", "status", "TEXT DEFAULT 'active'")
     _migrate_add_column("users", "password_changed", "INTEGER DEFAULT 1")
+    _migrate_add_column("users", "resend_api_key", "TEXT DEFAULT ''")
 
     # Create password_reset_tokens table
     conn.executescript("""
@@ -248,6 +249,13 @@ def update_user_api_key(user_id: int, api_key: str):
     """Update a user's Anthropic API key."""
     conn = get_db()
     conn.execute("UPDATE users SET api_key = ? WHERE id = ?", (api_key, user_id))
+    conn.commit()
+
+
+def update_user_resend_key(user_id: int, resend_key: str):
+    """Update a user's Resend API key (stored in database)."""
+    conn = get_db()
+    conn.execute("UPDATE users SET resend_api_key = ? WHERE id = ?", (resend_key, user_id))
     conn.commit()
 
 
