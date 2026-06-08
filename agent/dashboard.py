@@ -2425,7 +2425,7 @@ async function renderHistory() {
       fetch('/api/user-feedback').catch(() => ({ json: () => ({ feedback: [] }) })),
     ]);
     const fbData = await fbResp.json();
-    _feedbackMap = new Map((fbData.feedback || []).map(f => [f.application_id, f.rating]));
+    _feedbackMap = new Map((fbData.feedback || []).map(f => [String(f.application_id), f.rating]));
     const data = await histResp.json();
     const appliedData = await appliedResp.json();
     const savedData = await savedResp.json();
@@ -2585,8 +2585,8 @@ function _renderJobList(jobs) {
         </div>
         <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
           <div class="feedback-group">
-            <button class="fb-btn up${_feedbackMap.get(jobId) === 1 ? ' active' : ''}" onclick="submitFeedback('${jobId}', 1, '${escHtml(job.job?.title || '')}', '${escHtml(job.job?.company || '')}', this)" title="Good match">[+] Good</button>
-            <button class="fb-btn down${_feedbackMap.get(jobId) === -1 ? ' active' : ''}" onclick="submitFeedback('${jobId}', -1, '${escHtml(job.job?.title || '')}', '${escHtml(job.job?.company || '')}', this)" title="Bad match">[-] Skip</button>
+            <button class="fb-btn up${_feedbackMap.get(jobId) === 1 ? ' active' : ''}" data-app-id="${jobId}" data-rating="1" data-title="${escHtmlAttr(job.job?.title || '')}" data-company="${escHtmlAttr(job.job?.company || '')}" title="Good match">[+] Good</button>
+            <button class="fb-btn down${_feedbackMap.get(jobId) === -1 ? ' active' : ''}" data-app-id="${jobId}" data-rating="-1" data-title="${escHtmlAttr(job.job?.title || '')}" data-company="${escHtmlAttr(job.job?.company || '')}" title="Bad match">[-] Skip</button>
           </div>
           ${saveHtml}
           ${actionHtml}
@@ -2609,8 +2609,8 @@ async function submitFeedback(appId, rating, title, company, btn) {
     });
     const data = await resp.json();
     if (data.status === 'ok') {
-      if (newRating === 0) _feedbackMap.delete(appId);
-      else _feedbackMap.set(appId, newRating);
+      if (newRating === 0) _feedbackMap.delete(String(appId));
+      else _feedbackMap.set(String(appId), newRating);
       applyFiltersAndSort();
     }
   } catch (err) { console.error('Feedback error:', err); }
@@ -2618,6 +2618,20 @@ async function submitFeedback(appId, rating, title, company, btn) {
   // Refresh the feedback summary card live
   loadFeedbackSummary();
 }
+
+// Global click handler for feedback buttons
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('.fb-btn');
+  if (!btn) return;
+  // Already handled by inline onclick? No, we removed inline handlers for data-attr approach.
+  // Check if it has data-app-id (the new style without inline onclick)
+  if (!btn.hasAttribute('data-app-id')) return;
+  const appId = btn.dataset.appId;
+  const rating = parseInt(btn.dataset.rating);
+  const title = btn.dataset.title || '';
+  const company = btn.dataset.company || '';
+  submitFeedback(appId, rating, title, company, btn);
+});
 
 async function toggleSaveJob(applicationId, btn) {
   const isSaved = _savedSet.has(applicationId);
@@ -2715,6 +2729,11 @@ function escHtml(str) {
   const div = document.createElement('div');
   div.textContent = str || '';
   return div.innerHTML;
+}
+// Escape for HTML attribute values (single quotes and double quotes)
+function escHtmlAttr(str) {
+  if (!str) return '';
+  return String(str).replace(/'/g, '\\u0027').replace(/"/g, '\\u0022');
 }
 
 // Feedback summary stats loader
