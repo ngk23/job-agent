@@ -3679,72 +3679,72 @@ async function handleReset(e) {
 <title>Job Agent - Admin</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;600;700&display=swap');
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  :root {{ --bg: #0a0a0f; --surface: #12121a; --surface2: #1a1a2e; --border: #2a2a4a; --primary: #00ff41; --accent: #0ff; --text: #c8c8d0; --text-dim: #666; --warning: #ffaa00; --error: #ff3355; }}
-  body {{ font-family: 'Share Tech Mono', monospace; background: var(--bg); color: var(--text); padding: 30px; }}
-  .container {{ max-width: 1200px; margin: 0 auto; }}
-  h1 {{ font-size: 1.8em; background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 30px; }}
-  .stats {{ display: flex; gap: 16px; margin-bottom: 30px; flex-wrap: wrap; }}
-  .stat-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 24px; flex: 1; min-width: 120px; }}
-  .stat-card .num {{ font-size: 2em; color: var(--primary); }}
-  .stat-card .lbl {{ font-size: 0.75em; color: var(--text-dim); text-transform: uppercase; }}
-  .stat-card.warning .num {{ color: var(--warning); }}
-  table {{ width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 30px; }}
-  th {{ background: var(--surface2); color: var(--accent); padding: 10px 14px; text-align: left; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px; }}
-  td {{ padding: 10px 14px; border-top: 1px solid var(--border); font-size: 0.85em; }}
-  tr:hover td {{ background: var(--surface2); }}
-  .badge {{ padding: 2px 8px; border-radius: 4px; font-size: 0.75em; }}
-  .badge-admin {{ background: rgba(0,255,255,0.15); color: var(--accent); border: 1px solid rgba(0,255,255,0.3); }}
-  .badge-user {{ background: rgba(0,255,65,0.1); color: var(--primary); border: 1px solid rgba(0,255,65,0.2); }}
-  .badge-pending {{ background: rgba(255,170,0,0.15); color: var(--warning); border: 1px solid rgba(255,170,0,0.3); }}
-  .btn-approve {{ padding: 4px 12px; background: transparent; border: 1px solid var(--primary); border-radius: 4px; color: var(--primary); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }}
-  .btn-approve:hover {{ background: rgba(0,255,65,0.15); }}
-  .btn-reject {{ padding: 4px 12px; background: transparent; border: 1px solid var(--error); border-radius: 4px; color: var(--error); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }}
-  .btn-reject:hover {{ background: rgba(255,51,85,0.15); }}
-  .btn-reset {{ padding: 4px 12px; background: transparent; border: 1px solid var(--warning); border-radius: 4px; color: var(--warning); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }}
-  .btn-reset:hover {{ background: rgba(255,170,0,0.15); }}
-  .btn-delete {{ padding: 4px 12px; background: transparent; border: 1px solid var(--error); border-radius: 4px; color: var(--error); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }}
-  .btn-delete:hover {{ background: rgba(255,51,85,0.2); }}
-  .btn-group {{ display: flex; gap: 6px; }}
-  a {{ color: var(--accent); text-decoration: none; }}
-  a:hover {{ text-decoration: underline; }}
-  .nav {{ margin-bottom: 20px; display: flex; gap: 16px; align-items: center; }}
-  .nav a {{ font-size: 0.85em; }}
-  .nav .pending-badge {{ background: rgba(255,170,0,0.15); color: var(--warning); padding: 2px 10px; border-radius: 12px; font-size: 0.75em; }}
-  .score {{ color: var(--primary); font-weight: bold; }}
-  .section-title {{ color: var(--accent); font-size: 0.9em; text-transform: uppercase; letter-spacing: 2px; margin: 20px 0 10px; display: flex; align-items: center; gap: 10px; }}
-  .empty {{ text-align: center; padding: 30px; color: var(--text-dim); font-size: 0.85em; }}
-  .admin-summary {{ display: flex; gap: 20px; margin-bottom: 24px; flex-wrap: wrap; }}
-  .sum-item {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 20px; text-align: center; min-width: 130px; flex: 1; }}
-  .sum-num {{ font-size: 1.6em; color: var(--primary); display: block; }}
-  .sum-item:nth-child(2) .sum-num {{ color: var(--warning); }}
-  .sum-item:nth-child(3) .sum-num {{ color: var(--accent); }}
-  .sum-item:nth-child(4) .sum-num {{ color: var(--primary); }}
-  .modal {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; }}
-  .modal.open {{ display: flex; }}
-  .modal-content {{ background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; max-width: 800px; width: 92%; max-height: 80vh; overflow-y: auto; }}
-  .modal-content h3 {{ color: var(--accent); margin-bottom: 12px; }}
-  .modal-close {{ float: right; cursor: pointer; color: var(--text-dim); font-size: 1.3em; }}
-  .modal-close:hover {{ color: var(--error); }}
-  .activity-entry {{ padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 0.8em; }}
-  .activity-entry:last-child {{ border-bottom: none; }}
-  .activity-time {{ color: var(--text-dim); font-size: 0.85em; }}
-  .activity-action {{ color: var(--accent); }}
-  .pulse {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; }}
-  .pulse.online {{ background: var(--primary); box-shadow: 0 0 6px var(--primary); }}
-  .btn-activity {{ padding: 4px 10px; background: transparent; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; }}
-  .btn-activity:hover {{ background: rgba(0,255,255,0.1); }}</style></head>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root { --bg: #0a0a0f; --surface: #12121a; --surface2: #1a1a2e; --border: #2a2a4a; --primary: #00ff41; --accent: #0ff; --text: #c8c8d0; --text-dim: #666; --warning: #ffaa00; --error: #ff3355; }
+  body { font-family: 'Share Tech Mono', monospace; background: var(--bg); color: var(--text); padding: 30px; }
+  .container { max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 1.8em; background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 30px; }
+  .stats { display: flex; gap: 16px; margin-bottom: 30px; flex-wrap: wrap; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 24px; flex: 1; min-width: 120px; }
+  .stat-card .num { font-size: 2em; color: var(--primary); }
+  .stat-card .lbl { font-size: 0.75em; color: var(--text-dim); text-transform: uppercase; }
+  .stat-card.warning .num { color: var(--warning); }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 30px; }
+  th { background: var(--surface2); color: var(--accent); padding: 10px 14px; text-align: left; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px; }
+  td { padding: 10px 14px; border-top: 1px solid var(--border); font-size: 0.85em; }
+  tr:hover td { background: var(--surface2); }
+  .badge { padding: 2px 8px; border-radius: 4px; font-size: 0.75em; }
+  .badge-admin { background: rgba(0,255,255,0.15); color: var(--accent); border: 1px solid rgba(0,255,255,0.3); }
+  .badge-user { background: rgba(0,255,65,0.1); color: var(--primary); border: 1px solid rgba(0,255,65,0.2); }
+  .badge-pending { background: rgba(255,170,0,0.15); color: var(--warning); border: 1px solid rgba(255,170,0,0.3); }
+  .btn-approve { padding: 4px 12px; background: transparent; border: 1px solid var(--primary); border-radius: 4px; color: var(--primary); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }
+  .btn-approve:hover { background: rgba(0,255,65,0.15); }
+  .btn-reject { padding: 4px 12px; background: transparent; border: 1px solid var(--error); border-radius: 4px; color: var(--error); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }
+  .btn-reject:hover { background: rgba(255,51,85,0.15); }
+  .btn-reset { padding: 4px 12px; background: transparent; border: 1px solid var(--warning); border-radius: 4px; color: var(--warning); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }
+  .btn-reset:hover { background: rgba(255,170,0,0.15); }
+  .btn-delete { padding: 4px 12px; background: transparent; border: 1px solid var(--error); border-radius: 4px; color: var(--error); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; transition: all 0.2s; }
+  .btn-delete:hover { background: rgba(255,51,85,0.2); }
+  .btn-group { display: flex; gap: 6px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .nav { margin-bottom: 20px; display: flex; gap: 16px; align-items: center; }
+  .nav a { font-size: 0.85em; }
+  .nav .pending-badge { background: rgba(255,170,0,0.15); color: var(--warning); padding: 2px 10px; border-radius: 12px; font-size: 0.75em; }
+  .score { color: var(--primary); font-weight: bold; }
+  .section-title { color: var(--accent); font-size: 0.9em; text-transform: uppercase; letter-spacing: 2px; margin: 20px 0 10px; display: flex; align-items: center; gap: 10px; }
+  .empty { text-align: center; padding: 30px; color: var(--text-dim); font-size: 0.85em; }
+  .admin-summary { display: flex; gap: 20px; margin-bottom: 24px; flex-wrap: wrap; }
+  .sum-item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 20px; text-align: center; min-width: 130px; flex: 1; }
+  .sum-num { font-size: 1.6em; color: var(--primary); display: block; }
+  .sum-item:nth-child(2) .sum-num { color: var(--warning); }
+  .sum-item:nth-child(3) .sum-num { color: var(--accent); }
+  .sum-item:nth-child(4) .sum-num { color: var(--primary); }
+  .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; }
+  .modal.open { display: flex; }
+  .modal-content { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; max-width: 800px; width: 92%; max-height: 80vh; overflow-y: auto; }
+  .modal-content h3 { color: var(--accent); margin-bottom: 12px; }
+  .modal-close { float: right; cursor: pointer; color: var(--text-dim); font-size: 1.3em; }
+  .modal-close:hover { color: var(--error); }
+  .activity-entry { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 0.8em; }
+  .activity-entry:last-child { border-bottom: none; }
+  .activity-time { color: var(--text-dim); font-size: 0.85em; }
+  .activity-action { color: var(--accent); }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .pulse.online { background: var(--primary); box-shadow: 0 0 6px var(--primary); }
+  .btn-activity { padding: 4px 10px; background: transparent; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent); font-family: 'Share Tech Mono', monospace; font-size: 0.75em; cursor: pointer; }
+  .btn-activity:hover { background: rgba(0,255,255,0.1); }</style></head>
 <body>
 <div class="container">
   <div class="nav">
     <a href="/">← Dashboard</a>
     <span style="flex:1;"></span>
-    <a href="/logout" onclick="fetch('/logout',{{method:'POST'}}).then(()=>location='/login')">Logout</a>
+    <a href="/logout" onclick="fetch('/logout',{method:'POST'}).then(()=>location='/login')">Logout</a>
   </div>
   <h1>🛡️ Admin Panel</h1>
   
   <div class="admin-summary">
-    <div class="sum-item"><span class="sum-num">{len(users)}</span> Registered Users</div>
+    <div class="sum-item"><span class="sum-num">{len_users}</span> Registered Users</div>
     <div class="sum-item"><span class="sum-num">{pending_count}</span> Pending ⏳</div>
     <div class="sum-item"><span class="sum-num" id="activeNowCount">-</span> Active Now <span class="pulse online"></span></div>
   <div class="resend-section" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px;">
@@ -3780,7 +3780,7 @@ async function handleReset(e) {
 
   {pending_section}
   
-  <div class="section-title">👥 All Users <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">({len(users)} total)</span></div>
+  <div class="section-title">👥 All Users <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">({len_users} total)</span></div>
   <table>
     <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th>Track</th><th>Actions</th></tr>
     {users_rows}
@@ -3826,72 +3826,72 @@ async function setResendKey() {
   }
 }
 
-async function deleteUser(userId) {{
+async function deleteUser(userId) {
   if (!confirm('Delete user ID ' + userId + '? This cannot be undone.')) return;
-  try {{
-    const resp = await fetch('/admin/api/delete-user/' + userId, {{ method: 'POST' }});
+  try {
+    const resp = await fetch('/admin/api/delete-user/' + userId, { method: 'POST' });
     const data = await resp.json();
-    if (data.status === 'ok') {{ location.reload(); }}
-    else {{ alert('Failed: ' + (data.error || 'Unknown error')); }}
-  }} catch (err) {{ alert('Error: ' + err.message); }}
-}}
+    if (data.status === 'ok') { location.reload(); }
+    else { alert('Failed: ' + (data.error || 'Unknown error')); }
+  } catch (err) { alert('Error: ' + err.message); }
+}
 
-async function resetUserPassword(userId) {{
+async function resetUserPassword(userId) {
   if (!confirm('Reset password for user ID ' + userId + '?')) return;
-  try {{
-    const resp = await fetch('/admin/api/reset-user-password/' + userId, {{ method: 'POST' }});
+  try {
+    const resp = await fetch('/admin/api/reset-user-password/' + userId, { method: 'POST' });
     const data = await resp.json();
-    if (data.status === 'ok') {{ var msg = 'Password reset successful!'; if (data.new_password) msg += ' New password: ' + data.new_password; alert(msg); }}
-    else {{ alert('Failed: ' + (data.error || 'Unknown error')); }}
-  }} catch (err) {{ alert('Error: ' + err.message); }}
-}}
+    if (data.status === 'ok') { var msg = 'Password reset successful!'; if (data.new_password) msg += ' New password: ' + data.new_password; alert(msg); }
+    else { alert('Failed: ' + (data.error || 'Unknown error')); }
+  } catch (err) { alert('Error: ' + err.message); }
+}
 
-async function showUserActivity(userId) {{
+async function showUserActivity(userId) {
   const el = document.getElementById('recentActivityContent');
   if (!el) return;
   el.innerHTML = 'Loading...';
-  try {{
+  try {
     const resp = await fetch('/admin/api/user-activity/' + userId);
     const data = await resp.json();
-    if (data.activity && data.activity.length > 0) {{
+    if (data.activity && data.activity.length > 0) {
       let html = '<table style="width:100%;border-collapse:collapse;font-size:0.8em;">';
-      for (const a of data.activity) {{
+      for (const a of data.activity) {
         html += '<tr><td style="padding:4px 8px;border-bottom:1px solid rgba(255,255,255,0.05);">' + escHtml(a.action) + '</td>'
           + '<td style="padding:4px 8px;border-bottom:1px solid rgba(255,255,255,0.05);">' + escHtml(a.details || '') + '</td>'
           + '<td style="padding:4px 8px;border-bottom:1px solid rgba(255,255,255,0.05);">' + (a.created_at || '').slice(0, 16) + '</td></tr>';
-      }}
+      }
       html += '</table>';
       el.innerHTML = html;
-    }} else {{
+    } else {
       el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-dim);">No activity found.</div>';
-    }}
-  }} catch (err) {{ el.innerHTML = '<div style="color:var(--error);padding:10px;">Error</div>'; }}
-}}
+    }
+  } catch (err) { el.innerHTML = '<div style="color:var(--error);padding:10px;">Error</div>'; }
+}
 
-async function approveUser(userId) {{
-  try {{
-    const resp = await fetch('/admin/api/approve-user/' + userId, {{ method: 'POST' }});
+async function approveUser(userId) {
+  try {
+    const resp = await fetch('/admin/api/approve-user/' + userId, { method: 'POST' });
     const data = await resp.json();
-    if (data.status === 'ok') {{ location.reload(); }}
-    else {{ alert('Failed: ' + (data.error || 'Unknown error')); }}
-  }} catch (err) {{ alert('Error: ' + err.message); }}
-}}
+    if (data.status === 'ok') { location.reload(); }
+    else { alert('Failed: ' + (data.error || 'Unknown error')); }
+  } catch (err) { alert('Error: ' + err.message); }
+}
 
-async function rejectUser(userId) {{
+async function rejectUser(userId) {
   if (!confirm('Reject user ID ' + userId + '?')) return;
-  try {{
-    const resp = await fetch('/admin/api/reject-user/' + userId, {{ method: 'POST' }});
+  try {
+    const resp = await fetch('/admin/api/reject-user/' + userId, { method: 'POST' });
     const data = await resp.json();
-    if (data.status === 'ok') {{ location.reload(); }}
-    else {{ alert('Failed: ' + (data.error || 'Unknown error')); }}
-  }} catch (err) {{ alert('Error: ' + err.message); }}
-}}
+    if (data.status === 'ok') { location.reload(); }
+    else { alert('Failed: ' + (data.error || 'Unknown error')); }
+  } catch (err) { alert('Error: ' + err.message); }
+}
 
-function escHtml(str) {{
+function escHtml(str) {
   var d = document.createElement('div');
   d.textContent = str || '';
   return d.innerHTML;
-}}
+}
 </script>
 
 </body></html>"""
@@ -3935,6 +3935,9 @@ function escHtml(str) {{
                 f'</div></td></tr>'
             )
         users_rows_str = "".join(users_rows_list)
+        html = html.replace('{len_users}', str(len(users)))
+        html = html.replace('{pending_count}', str(pending_count))
+        # feedback rate is populated via JS (id="feedbackRate")
         html = html.replace('{pending_section}', pending_section)
         html = html.replace('{users_rows}', users_rows_str)
         # Admin template uses plain string replacement, no Jinja2
