@@ -42,6 +42,7 @@ from .auth import (
     DEFAULT_ADMIN_PASSWORD,
 )
 from .notifier import notify_approved, notify_rejected, send_password_reset_email, set_resend_api_key, _get_resend_api_key
+from .feedback_learning import get_feedback_insights_short
 from .database import (
     init_db,
     get_user_applications,
@@ -157,6 +158,13 @@ def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = N
         env["USER_ID"] = str(user_id)
 
     cmd = [sys.executable, "-m", "agent", "run", "--headless"]
+
+    try:
+        fb_insight = get_feedback_insights_short()
+        if fb_insight and fb_insight != "No feedback data yet":
+            _output_queue.put(f"[LEARN] {fb_insight}\n")
+    except Exception:
+        pass
 
     _output_queue.put("[SYSTEM] Initializing Job Agent...\n")
     _output_queue.put("[SYSTEM] Launching browser, searching job platforms...\n\n")
@@ -1108,6 +1116,37 @@ async function handleSignup(e) {
     opacity: 0.3;
     cursor: not-allowed;
   }
+
+  /* Feedback Buttons */
+  .feedback-group {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .fb-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.8em;
+    cursor: pointer;
+    transition: all 0.2s;
+    line-height: 1;
+  }
+  .fb-btn:hover {
+    border-color: var(--accent);
+    background: rgba(0,255,255,0.06);
+  }
+  .fb-btn.up:hover { border-color: var(--primary); color: var(--primary); background: rgba(0,255,65,0.08); }
+  .fb-btn.down:hover { border-color: var(--error); color: var(--error); background: rgba(255,51,85,0.08); }
+  .fb-btn.active.up { border-color: var(--primary); color: var(--primary); background: rgba(0,255,65,0.15); }
+  .fb-btn.active.down { border-color: var(--error); color: var(--error); background: rgba(255,51,85,0.15); }
+  .fb-btn.loading { opacity: 0.5; pointer-events: none; }
 
   /* ── API Key Section ── */
   .api-key-section {
@@ -2292,6 +2331,7 @@ const historyContent = document.getElementById('historyContent');
 let _allHistoryJobs = [];
 let _appliedSet = new Set();
 let _savedSet = new Set();
+let _feedbackMap = new Map();
 
 async function logoutUser() {
   await fetch('/logout', { method: 'POST' });
@@ -2314,11 +2354,14 @@ async function renderHistory() {
   historyContent.innerHTML = '<div class="history-loading"><span class="spinner"></span> Loading history...</div>';
   try {
     // Fetch history, applied set, and saved set in parallel
-    const [histResp, appliedResp, savedResp] = await Promise.all([
+    const [histResp, appliedResp, savedResp, fbResp] = await Promise.all([
       fetch('/api/history'),
       fetch('/api/applied'),
       fetch('/api/saved'),
+      fetch('/api/user-feedback').catch(() => ({ json: () => ({ feedback: [] }) })),
     ]);
+    const fbData = await fbResp.json();
+    _feedbackMap = new Map((fbData.feedback || []).map(f => [f.application_id, f.rating]));
     const data = await histResp.json();
     const appliedData = await appliedResp.json();
     const savedData = await savedResp.json();
@@ -2477,12 +2520,37 @@ function _renderJobList(jobs) {
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+          <div class="feedback-group">
+            <button class="fb-btn up${_feedbackMap.get(jobId) === 1 ? ' active' : ''}" onclick="submitFeedback('${jobId}', 1, '${escHtml(job.job?.title || '')}', '${escHtml(job.job?.company || '')}', this)" title="Good match">+1</button>
+            <button class="fb-btn down${_feedbackMap.get(jobId) === -1 ? ' active' : ''}" onclick="submitFeedback('${jobId}', -1, '${escHtml(job.job?.title || '')}', '${escHtml(job.job?.company || '')}', this)" title="Bad match">-1</button>
+          </div>
           ${saveHtml}
           ${actionHtml}
         </div>
       </div>`;
   }
   historyContent.innerHTML = html;
+}
+
+async function submitFeedback(appId, rating, title, company, btn) {
+  if (btn.classList.contains('loading')) return;
+  btn.classList.add('loading');
+  const currentRating = _feedbackMap.get(appId);
+  const newRating = (currentRating === rating) ? 0 : rating;
+  try {
+    const resp = await fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating: newRating, application_id: appId, title: title || '', company: company || '' })
+    });
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      if (newRating === 0) _feedbackMap.delete(appId);
+      else _feedbackMap.set(appId, newRating);
+      applyFiltersAndSort();
+    }
+  } catch (err) { console.error('Feedback error:', err); }
+  btn.classList.remove('loading');
 }
 
 async function toggleSaveJob(applicationId, btn) {
@@ -4060,6 +4128,19 @@ function escHtml(str) {
     @require_admin
     def admin_active_users():
         return jsonify({'active_count': get_active_users_count(minutes=30)})
+
+    @app.route('/api/user-feedback', methods=['GET'])
+    @require_login
+    def get_user_feedback():
+        """Get all feedback submitted by the current user."""
+        from .database import get_db
+        uid = get_user_id()
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT application_id, rating FROM job_feedback WHERE user_id = ?",
+            (uid,),
+        ).fetchall()
+        return jsonify({'feedback': [dict(r) for r in rows]})
 
     @app.route('/api/feedback', methods=['POST'])
     @require_login
