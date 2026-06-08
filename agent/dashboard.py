@@ -2916,14 +2916,10 @@ async function handleChangePw(e) {
         else:
             random_password = secrets.token_urlsafe(16)
             pw_hash = generate_password_hash(random_password)
-            user = create_user(email, pw_hash, name, role='user', status='active')
+            user = create_user(email, pw_hash, name, role='user', status='pending')
             if user:
-                session['user_id'] = user['id']
-                session['user_name'] = user['name']
-                session['user_role'] = user['role']
-                session['user_email'] = user['email']
-                logger.info("New user created via Google: %s", email)
-                return redirect(url_for('index', _external=True))
+                logger.info("New Google user created (pending approval): %s", email)
+                return redirect(url_for('login_page', _external=True) + '?error=pending')
             else:
                 return redirect(url_for('login_page', _external=True) + '?error=creation_failed')
 
