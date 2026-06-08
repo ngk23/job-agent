@@ -1117,6 +1117,57 @@ async function handleSignup(e) {
     cursor: not-allowed;
   }
 
+  /* Feedback Summary Card */
+  .feedback-summary {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 20px;
+    font-size: 0.8em;
+    min-height: 44px;
+  }
+  .feedback-summary .fs-label {
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-size: 0.75em;
+    white-space: nowrap;
+  }
+  .feedback-summary .fs-stats {
+    display: flex;
+    gap: 14px;
+    flex: 1;
+  }
+  .feedback-summary .fs-stat {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .feedback-summary .fs-stat .num {
+    font-weight: 700;
+    font-size: 1.1em;
+  }
+  .feedback-summary .fs-stat .num.up { color: var(--primary); }
+  .feedback-summary .fs-stat .num.down { color: var(--error); }
+  .feedback-summary .fs-stat .num.rate { color: var(--accent); }
+  .feedback-summary .fs-stat .lbl {
+    color: var(--text-dim);
+    font-size: 0.85em;
+  }
+  .feedback-summary .fs-empty {
+    color: var(--text-dim);
+    font-style: italic;
+    font-size: 0.85em;
+  }
+  .feedback-summary .fs-loading {
+    color: var(--text-dim);
+    font-size: 0.85em;
+  }
+
   /* Feedback Buttons */
   .feedback-group {
     display: flex;
@@ -1830,6 +1881,18 @@ async function handleSignup(e) {
     {% endif %}
     <a href="/change-password">🔑 Change PW</a>
     <button class="logout-btn" onclick="logoutUser()">🚪 Logout</button>
+  </div>
+
+  <!-- Feedback Summary -->
+  <div class="feedback-summary" id="feedbackSummary">
+    <span class="fs-label">Your Feedback:</span>
+    <div class="fs-loading" id="fsLoading">Loading...</div>
+    <div class="fs-stats" id="fsStats" style="display:none;">
+      <span class="fs-stat"><span class="num up" id="fsUp">0</span> <span class="lbl">Good</span></span>
+      <span class="fs-stat"><span class="num down" id="fsDown">0</span> <span class="lbl">Skip</span></span>
+      <span class="fs-stat"><span class="num rate" id="fsRate">0%</span> <span class="lbl">Positivity</span></span>
+    </div>
+    <div class="fs-empty" id="fsEmpty" style="display:none;">No ratings yet — rate jobs using [+] / [-] buttons</div>
   </div>
 
   <!-- API Key Section -->
@@ -2551,6 +2614,8 @@ async function submitFeedback(appId, rating, title, company, btn) {
     }
   } catch (err) { console.error('Feedback error:', err); }
   btn.classList.remove('loading');
+  // Refresh the feedback summary card live
+  loadFeedbackSummary();
 }
 
 async function toggleSaveJob(applicationId, btn) {
@@ -4128,6 +4193,25 @@ function escHtml(str) {
     @require_admin
     def admin_active_users():
         return jsonify({'active_count': get_active_users_count(minutes=30)})
+
+    @app.route('/api/my-feedback-stats', methods=['GET'])
+    @require_login
+    def my_feedback_stats():
+        """Get feedback summary stats for the current user."""
+        from .database import get_db
+        uid = get_user_id()
+        conn = get_db()
+        total = conn.execute(
+            "SELECT COUNT(*) as c FROM job_feedback WHERE user_id = ?", (uid,)
+        ).fetchone()["c"]
+        up = conn.execute(
+            "SELECT COUNT(*) as c FROM job_feedback WHERE user_id = ? AND rating = 1", (uid,)
+        ).fetchone()["c"]
+        down = conn.execute(
+            "SELECT COUNT(*) as c FROM job_feedback WHERE user_id = ? AND rating = -1", (uid,)
+        ).fetchone()["c"]
+        rate = round(up / total * 100) if total > 0 else 0
+        return jsonify({"total": total, "thumbs_up": up, "thumbs_down": down, "positivity_rate": rate})
 
     @app.route('/api/user-feedback', methods=['GET'])
     @require_login
