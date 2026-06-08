@@ -2733,7 +2733,9 @@ function escHtml(str) {
 // Escape for HTML attribute values (single quotes and double quotes)
 function escHtmlAttr(str) {
   if (!str) return '';
-  return String(str).replace(/'/g, '\\u0027').replace(/"/g, '\\u0022');
+  // Escape for safe insertion into HTML attribute values (data-*)
+  // HTML entities are correctly decoded by the browser when read via dataset
+  return String(str).replace(/'/g, '&#39;').replace(/"/g, '&#34;');
 }
 
 // Feedback summary stats loader
