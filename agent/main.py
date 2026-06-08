@@ -15,6 +15,7 @@ from .scrapers import scrape_linkedin, scrape_indeed, scrape_glassdoor, scrape_m
 from .ai import AIClient
 from .tracker import ApplicationTracker
 from .dashboard import run_dashboard
+from .feedback_learning import get_feedback_insights_for_prompt
 from .models import Job, Platform, AIResult
 from .word_exporter import export_jobs_to_word, export_scored_jobs_to_word, ScoredJob
 
@@ -159,6 +160,19 @@ async def run_agent(config: AppConfig):
     resume_text = resume_handler.get_for_cover_letter() if resume_handler else ""
 
     ai_client = AIClient(config)
+    
+    # Load feedback learning insights for self-improvement
+    try:
+        feedback_insights = get_feedback_insights_for_prompt(days=30)
+        if feedback_insights:
+            print(f"  [LEARN] Loaded feedback insights for agent self-improvement")
+            ai_client.feedback_insights = feedback_insights
+        else:
+            ai_client.feedback_insights = ""
+    except Exception as e:
+        logger.warning(f"Could not load feedback insights: {e}")
+        ai_client.feedback_insights = ""
+    
     tracker = ApplicationTracker(data_dir=config.data_dir)
 
     print(f"\n{'='*60}")
