@@ -3778,12 +3778,12 @@ async function handleReset(e) {
     </form>
   </div>
 
-  {{pending_section}}
+  {pending_section}
   
   <div class="section-title">👥 All Users <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">({len(users)} total)</span></div>
   <table>
     <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th>Track</th><th>Actions</th></tr>
-    {{users_rows}}
+    {users_rows}
   </table>
   
   <div class="section-title"> Recent Activity <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(all users)</span></div>
@@ -3937,7 +3937,8 @@ function escHtml(str) {{
         users_rows_str = "".join(users_rows_list)
         html = html.replace('{pending_section}', pending_section)
         html = html.replace('{users_rows}', users_rows_str)
-        return render_template_string(html)
+        # Admin template uses plain string replacement, no Jinja2
+        return Response(html, mimetype='text/html')
 
     @app.route('/admin/api/stats')
     @require_admin
