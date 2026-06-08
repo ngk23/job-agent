@@ -11,7 +11,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Resend API key â€” checked in order:
+# Resend API key — checked in order:
 # 1. Runtime-set key (from dashboard admin panel, stored in DB)
 # 2. Environment variable (RESEND_API_KEY)
 _runtime_api_key: str = ""
@@ -38,22 +38,22 @@ APPROVED_SUBJECT = "Your Job Agent account has been approved!"
 APPROVED_BODY = """
 Hi {name},
 
-Your account on Job Agent has been approved! ðŸŽ‰
+Your account on Job Agent has been approved! 🎉
 
 You can now log in and start using the platform:
 {app_url}
 
 What you can do:
-â€¢ Upload your CV and let the AI analyze your profile
-â€¢ Search for jobs across LinkedIn, Indeed, Glassdoor, and Monster
-â€¢ Get AI-powered match scores for each job
-â€¢ Generate tailored CVs for high-match positions
-â€¢ Save your favorite jobs for later
+• Upload your CV and let the AI analyze your profile
+• Search for jobs across LinkedIn, Indeed, Glassdoor, and Monster
+• Get AI-powered match scores for each job
+• Generate tailored CVs for high-match positions
+• Save your favorite jobs for later
 
 Log in here: {app_url}
 
 Happy job hunting!
-â€” The Job Agent Team
+— The Job Agent Team
 """
 
 REJECTED_SUBJECT = "Your Job Agent registration was not approved"
@@ -64,7 +64,7 @@ Unfortunately, your registration request for Job Agent was not approved by the a
 
 If you believe this was a mistake, please contact the administrator directly.
 
-â€” The Job Agent Team
+— The Job Agent Team
 """
 
 
@@ -130,7 +130,7 @@ Click the link below to reset your password (valid for 1 hour):
 
 If you did not request a password reset, you can safely ignore this email.
 
-â€” The Job Agent Team
+— The Job Agent Team
 """
 
 
