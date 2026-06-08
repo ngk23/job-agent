@@ -4,6 +4,13 @@ Provides a cyberpunk-styled interface with authentication, CV upload,
 Run Agent button, real-time streaming output, results display, and admin panel.
 """
 
+# Load .env file early so env vars are available before module-level code runs
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import hashlib
 import json
 import logging
@@ -34,13 +41,13 @@ from .auth import (
     DEFAULT_ADMIN_EMAIL,
     DEFAULT_ADMIN_PASSWORD,
 )
-from .notifier import notify_approved, notify_rejected, send_password_reset_email
+from .notifier import notify_approved, notify_rejected, send_password_reset_email, set_resend_api_key, _get_resend_api_key
 from .database import (
     init_db,
     get_user_applications,
     get_all_applications,
     get_applied_urls,
-    mark_applied,
+    mark_applied as db_mark_applied,
     save_job as db_save_job,
     unsave_job as db_unsave_job,
     get_saved_application_ids,
@@ -210,6 +217,18 @@ def create_dashboard_app(config: AppConfig):
     if not stable_secret:
         stable_secret = hashlib.sha256(str(config.__dict__).encode()).hexdigest()[:32]
     app.secret_key = stable_secret
+
+    # ProxyFix: handle reverse proxy headers so url_for(_external=True) works
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+
+
+
+
+
+
+
     # Ensure session cookies work correctly on HF Spaces behind proxy
     app.config.update(
         SESSION_COOKIE_SECURE=True,
@@ -227,11 +246,23 @@ def create_dashboard_app(config: AppConfig):
     # On HF Spaces, copy initial files from project to /data if needed
     _init_persistent_data(config)
 
+    # Initialize Google OAuth (if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set)
+    from .oauth import init_oauth
+    init_oauth(app)
+
     # Initialize database and ensure admin user exists
     init_db()
     ensure_admin_exists()
     # Clean up expired saved jobs (older than 7 days)
     cleanup_old_saved_jobs(days=7)
+    # Load saved Resend API key from database
+    try:
+        admin_user = db_get_user_by_email(DEFAULT_ADMIN_EMAIL)
+        if admin_user and admin_user.get("resend_api_key"):
+            set_resend_api_key(admin_user["resend_api_key"])
+            logger.info("Loaded Resend API key from database")
+    except Exception as e:
+        logger.warning("Could not load Resend API key from DB: %s", e)
 
     tracker = ApplicationTracker(data_dir=config.data_dir)
 
@@ -368,6 +399,31 @@ def create_dashboard_app(config: AppConfig):
     margin-top: 12px;
     display: none;
   }
+
+
+  .google-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 20px;
+    background: #fff;
+    border: 1px solid #dadce0;
+    border-radius: 4px;
+    color: #3c4043;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.85em;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.25px;
+  }
+  .google-btn:hover {
+    background: #f8f9fa;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    border-color: #c6c6c6;
+  }
+
 
   /* ── Hacking Animation Overlay ── */
   .hack-overlay {
@@ -517,6 +573,18 @@ def create_dashboard_app(config: AppConfig):
   </div>
   <div style="text-align:center;margin-top:10px;font-size:0.75em;">
     <a href="/forgot-password" style="color:var(--text-dim);text-decoration:none;">Forgot password?</a>
+  <div style="text-align:center;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+    <a href="/login/google" class="google-btn">
+      <svg style="width:18px;height:18px;vertical-align:middle;margin-right:8px;" viewBox="0 0 24 24">
+        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
+        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+      </svg>
+      Sign in with Google
+    </a>
+  </div>
+
   </div>
 </div>
 
@@ -1872,7 +1940,7 @@ async function handleSignup(e) {
           <option value="all">All</option>
           <option value="high">80%+</option>
           <option value="mid">60-79%</option>
-          <option value="low">0-59%</option>
+          <option value="low">50-59%</option>
         </select>
       </div>
       <div class="filter-group">
@@ -2256,7 +2324,7 @@ async function renderHistory() {
     _appliedSet = new Set(appliedData.applied || []);
     _savedSet = new Set(savedData.saved || []);
     // Client-side safety: filter out any unscored jobs (score=0)
-    _allHistoryJobs = (data.jobs || []).filter(j => (j.ai_score || 0) > 0);
+    _allHistoryJobs = (data.jobs || []).filter(j => (j.ai_score || 0) >= 50);
 
     if (_allHistoryJobs.length === 0) {
       historyContent.innerHTML = '<div class="history-empty">No scoring history yet. Run the agent to get started!</div>';
@@ -2295,6 +2363,7 @@ function applyFiltersAndSort() {
     if (scoreVal === 'high' && score < 80) return false;
     if (scoreVal === 'mid' && (score < 60 || score >= 80)) return false;
     if (scoreVal === 'low' && score >= 60) return false;
+    if (score < 50) return false;
 
     // Platform filter
     const platform = (job.job?.platform || 'unknown').toLowerCase();
@@ -2348,7 +2417,7 @@ function _renderJobList(jobs) {
   let html = '';
   for (const job of jobs) {
     const score = job.ai_score || 0;
-    const scoreClass = score >= 80 ? 'high' : (score >= 60 ? 'mid' : 'low');
+    const scoreClass = score >= 80 ? 'high' : (score >= 50 ? 'mid' : 'low');
     const platform = job.job?.platform || 'unknown';
     const skills = (job.matching_skills || []).slice(0, 3);
     const date = (job.timestamp || '').slice(0, 10);
@@ -2363,7 +2432,7 @@ function _renderJobList(jobs) {
       actionHtml = `<span class="history-applied">✅ Applied</span>`;
     } else if (jobUrl) {
       const safeUrl = escHtml(jobUrl);
-      actionHtml = `<button class="history-apply" data-url="${safeUrl}" onclick="applyToJob(this.dataset.url, this)">🔗 Apply</button>`;
+      actionHtml = `<a class="history-apply" href="${safeUrl}" target="_blank" rel="noopener noreferrer" onclick="applyToJob(this.href, this)">🔗 Apply</a>`;
     } else {
       actionHtml = `<span class="history-apply no-url">🔗 No Link</span>`;
     }
@@ -2465,10 +2534,8 @@ async function toggleSaveJob(applicationId, btn) {
   }
 }
 
-async function applyToJob(url, btn) {
-  // Disable button and show loading state
-  btn.disabled = true;
-  btn.textContent = '⏳ Applying...';
+async function applyToJob(url, linkEl) {
+  // Mark as applied via API (fires in background, link already opened via <a> tag)
   try {
     const resp = await fetch('/api/mark-applied', {
       method: 'POST',
@@ -2477,23 +2544,18 @@ async function applyToJob(url, btn) {
     });
     const data = await resp.json();
     if (data.status === 'ok') {
-      // Update global applied set so filters/sorts stay in sync
       _appliedSet.add(url);
-      // Replace button with Applied badge
-      btn.outerHTML = '<span class="history-applied">✅ Applied</span>';
-      // Re-apply filters so the list re-syncs (e.g. Status: Unapplied filter)
+      // Replace link with Applied badge
+      if (linkEl && linkEl.parentNode) {
+        const badge = document.createElement('span');
+        badge.className = 'history-applied';
+        badge.textContent = '✅ Applied';
+        linkEl.parentNode.replaceChild(badge, linkEl);
+      }
       applyFiltersAndSort();
-      // Open job listing in new tab
-      window.open(url, '_blank', 'noopener,noreferrer');
-    } else {
-      btn.textContent = '🔗 Apply';
-      btn.disabled = false;
-      alert('Failed to mark as applied: ' + (data.error || 'Unknown error'));
     }
   } catch (err) {
-    btn.textContent = '🔗 Apply';
-    btn.disabled = false;
-    alert('Error: ' + err.message);
+    console.error('Failed to mark job as applied:', err);
   }
 }
 
@@ -2778,6 +2840,87 @@ async function handleChangePw(e) {
         return jsonify({'status': 'error', 'error': 'Failed'}), 500
 
     # ── Forgot / Reset Password Routes ──
+
+
+    @app.route('/login/google')
+    def google_login():
+        """Initiate Google OAuth login."""
+        from .oauth import get_google_oauth, is_google_oauth_configured
+        if not is_google_oauth_configured():
+            return jsonify({'status': 'error', 'error': 'Google Sign-In not configured'}), 501
+        oauth = get_google_oauth()
+        if not oauth:
+            return jsonify({'status': 'error', 'error': 'Google OAuth not initialized'}), 500
+        # Use APP_URL env var for deployment, fall back to request-based URL
+        app_url = os.environ.get("APP_URL", "")
+        if app_url:
+            redirect_uri = f"{app_url.rstrip('/')}/login/google/callback"
+        else:
+            redirect_uri = url_for('google_callback', _external=True)
+        return oauth.google.authorize_redirect(redirect_uri)
+
+    @app.route('/login/google/callback')
+    def google_callback():
+        """Handle Google OAuth callback."""
+        from .oauth import extract_user_info, get_google_oauth, is_google_oauth_configured
+        from .database import create_user, get_user_by_email
+        from werkzeug.security import generate_password_hash
+        import secrets
+        if not is_google_oauth_configured():
+            return jsonify({'status': 'error', 'error': 'Google Sign-In not configured'}), 501
+        oauth = get_google_oauth()
+        if not oauth:
+            return jsonify({'status': 'error', 'error': 'OAuth not initialized'}), 500
+        try:
+            token = oauth.google.authorize_access_token()
+        except Exception as e:
+            logger.error("Google OAuth token error: %s", e)
+            return redirect(url_for('login_page', _external=True) + '?error=oauth_failed')
+        if not token:
+            return redirect(url_for('login_page', _external=True) + '?error=no_token')
+        userinfo = token.get('userinfo')
+        if not userinfo:
+            try:
+                resp = oauth.google.get('https://www.googleapis.com/oauth2/v3/userinfo')
+                userinfo = resp.json()
+            except Exception as e:
+                logger.error("Failed to get Google userinfo: %s", e)
+                return redirect(url_for('login_page', _external=True) + '?error=userinfo_failed')
+        info = extract_user_info(userinfo)
+        if not info or not info['email']:
+            return redirect(url_for('login_page', _external=True) + '?error=no_email')
+        email = info['email']
+        name = info['name'] or email.split('@')[0]
+        existing = get_user_by_email(email)
+        if existing:
+            if existing.get('status') == 'pending':
+                return redirect(url_for('login_page', _external=True) + '?error=pending')
+            if existing.get('status') == 'rejected':
+                return redirect(url_for('login_page', _external=True) + '?error=rejected')
+            session['user_id'] = existing['id']
+            session['user_name'] = existing['name']
+            session['user_role'] = existing['role']
+            session['user_email'] = existing['email']
+            logger.info("User logged in via Google: %s", email)
+            try:
+                from .database import log_activity
+                log_activity(existing['id'], email, 'login', 'Google OAuth login')
+            except Exception:
+                pass
+            return redirect(url_for('index', _external=True))
+        else:
+            random_password = secrets.token_urlsafe(16)
+            pw_hash = generate_password_hash(random_password)
+            user = create_user(email, pw_hash, name, role='user', status='active')
+            if user:
+                session['user_id'] = user['id']
+                session['user_name'] = user['name']
+                session['user_role'] = user['role']
+                session['user_email'] = user['email']
+                logger.info("New user created via Google: %s", email)
+                return redirect(url_for('index', _external=True))
+            else:
+                return redirect(url_for('login_page', _external=True) + '?error=creation_failed')
 
     @app.route('/forgot-password', methods=['GET', 'POST'])
     def forgot_password():
@@ -3340,7 +3483,7 @@ async function handleReset(e) {
         
         uid = get_user_id()
         if uid:
-            newly = mark_applied(uid, url)
+            newly = db_mark_applied(uid, url)
         else:
             newly = _mark_applied(url)
         logger.info(f"Job marked as applied: {url[:80]}...")
@@ -3530,7 +3673,7 @@ async function handleReset(e) {
         pending_count = len(pending_users)
         feedback_stats = get_feedback_summary()
         active_count = get_active_users_count(minutes=30)
-        html = f"""<!DOCTYPE html>
+        html = """<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Job Agent - Admin</title>
@@ -3604,6 +3747,16 @@ async function handleReset(e) {
     <div class="sum-item"><span class="sum-num">{len(users)}</span> Registered Users</div>
     <div class="sum-item"><span class="sum-num">{pending_count}</span> Pending ⏳</div>
     <div class="sum-item"><span class="sum-num" id="activeNowCount">-</span> Active Now <span class="pulse online"></span></div>
+  <div class="resend-section" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px;">
+    <h3 style="color:var(--accent);margin-bottom:12px;font-size:0.95em;letter-spacing:1px;">@ Email Notifications (Resend)</h3>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <input type="password" id="resendKeyInput" placeholder="re_... paste your Resend API key here"
+        style="flex:1;min-width:200px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Share Tech Mono',monospace;font-size:0.85em;outline:none;">
+      <button onclick="setResendKey()" style="padding:8px 16px;background:transparent;border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:0.85em;cursor:pointer;">SAVE</button>
+      <span id="resendKeyStatus" style="font-size:0.8em;color:var(--text-dim);">Not configured</span>
+    </div>
+  </div>
+
     <div class="sum-item"><span class="sum-num" id="feedbackRate">-</span> Positive Feedback</div>
   </div>
 
@@ -3645,6 +3798,34 @@ async function handleReset(e) {
   </div>
 <script>
 // Admin Panel JS
+
+async function setResendKey() {
+  const key = document.getElementById('resendKeyInput').value.trim();
+  if (!key || !key.startsWith('re_')) {
+    alert('Invalid Resend API key (must start with re_)');
+    return;
+  }
+  const statusEl = document.getElementById('resendKeyStatus');
+  statusEl.textContent = 'Saving...';
+  try {
+    const resp = await fetch('/admin/api/set-resend-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resend_api_key: key })
+    });
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      statusEl.textContent = 'Configured';
+      statusEl.style.color = 'var(--primary)';
+      document.getElementById('resendKeyInput').disabled = true;
+    } else {
+      statusEl.textContent = 'Failed: ' + (data.error || 'Unknown');
+    }
+  } catch (err) {
+    statusEl.textContent = 'Error: ' + err.message;
+  }
+}
+
 async function deleteUser(userId) {{
   if (!confirm('Delete user ID ' + userId + '? This cannot be undone.')) return;
   try {{
@@ -3789,7 +3970,15 @@ function escHtml(str) {{
                     logger.info(f"Approval email sent to {email}")
                 else:
                     logger.info(f"Approval email not sent to {email} (no email service configured)")
-            return jsonify({'status': 'ok', 'email_sent': True if email and os.environ.get('RESEND_API_KEY') else False})
+            saved_key = None
+            try:
+                admin = db_get_user_by_email(DEFAULT_ADMIN_EMAIL)
+                if admin and admin.get('resend_api_key'):
+                    saved_key = admin['resend_api_key']
+            except Exception:
+                pass
+            has_key = bool(os.environ.get('RESEND_API_KEY') or saved_key)
+            return jsonify({'status': 'ok', 'email_sent': email and has_key})
         return jsonify({'status': 'error', 'error': 'User not found or already approved'}), 404
 
     @app.route('/admin/api/reject-user/<int:target_user_id>', methods=['POST'])
@@ -3810,6 +3999,24 @@ function escHtml(str) {{
                     logger.info(f"Rejection email sent to {email}")
             return jsonify({'status': 'ok'})
         return jsonify({'status': 'error', 'error': 'User not found or already processed'}), 404
+
+    @app.route('/admin/api/set-resend-key', methods=['POST'])
+    @require_admin
+    def admin_set_resend_key():
+        """Save the Resend API key to the admin's account."""
+        data = request.get_json()
+        if not data or not data.get('resend_api_key'):
+            return jsonify({'status': 'error', 'error': 'API key required'}), 400
+        uid = get_user_id()
+        if not uid:
+            return jsonify({'status': 'error', 'error': 'Not authenticated'}), 401
+        api_key = data['resend_api_key'].strip()
+        ok = update_user_resend_key(uid, api_key)
+        if ok:
+            set_resend_api_key(api_key)
+            logger.info("Resend API key saved for admin user %s", uid)
+            return jsonify({'status': 'ok', 'message': 'Email notifications configured!'})
+        return jsonify({'status': 'error', 'error': 'Failed to save key'}), 500
 
     @app.route('/admin/api/user-apps/<int:target_user_id>')
     @require_admin
