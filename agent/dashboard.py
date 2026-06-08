@@ -2521,8 +2521,8 @@ function _renderJobList(jobs) {
         </div>
         <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
           <div class="feedback-group">
-            <button class="fb-btn up${_feedbackMap.get(jobId) === 1 ? ' active' : ''}" onclick="submitFeedback('${jobId}', 1, '${escHtml(job.job?.title || '')}', '${escHtml(job.job?.company || '')}', this)" title="Good match">+1</button>
-            <button class="fb-btn down${_feedbackMap.get(jobId) === -1 ? ' active' : ''}" onclick="submitFeedback('${jobId}', -1, '${escHtml(job.job?.title || '')}', '${escHtml(job.job?.company || '')}', this)" title="Bad match">-1</button>
+            <button class="fb-btn up${_feedbackMap.get(jobId) === 1 ? ' active' : ''}" onclick="submitFeedback('${jobId}', 1, '${escHtml(job.job?.title || '')}', '${escHtml(job.job?.company || '')}', this)" title="Good match">[+] Good</button>
+            <button class="fb-btn down${_feedbackMap.get(jobId) === -1 ? ' active' : ''}" onclick="submitFeedback('${jobId}', -1, '${escHtml(job.job?.title || '')}', '${escHtml(job.job?.company || '')}', this)" title="Bad match">[-] Skip</button>
           </div>
           ${saveHtml}
           ${actionHtml}
