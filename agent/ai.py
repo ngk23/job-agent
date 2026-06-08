@@ -20,6 +20,7 @@ class AIClient:
     def __init__(self, config: AppConfig):
         self.config = config
         self.client = None
+        self.feedback_insights = ""
         if config.anthropic_api_key:
             self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
     
@@ -180,8 +181,10 @@ Do not include any other text or explanation."""
         education = profile.get('education', {})
         resume_section = f"\n## Candidate Resume (first 800 chars)\n{resume_text[:800]}" if resume_text else ""
 
-        prompt = f"""You are a professional career coach helping score a quick job match.
+        _fb_section = f"\n## Learning from Past User Feedback\n{self.feedback_insights}\n" if getattr(self, 'feedback_insights', '') else ""
 
+        prompt = f"""You are a professional career coach helping score a quick job match.
+{_fb_section}
 ## Candidate Profile
 Name: {profile.get('name', 'Unknown')}
 Skills: {skills_str}
@@ -299,8 +302,10 @@ Rules:
         education = profile.get('education', {})
         resume_section = f"\n## Candidate Resume (first 1000 chars)\n{resume_text[:1000]}" if resume_text else ""
         
-        prompt = f"""You are a professional career coach helping tailor a job application.
+        _fb_section = f"\n## Learning from Past User Feedback\n{self.feedback_insights}\n" if getattr(self, 'feedback_insights', '') else ""
 
+        prompt = f"""You are a professional career coach helping tailor a job application.
+{_fb_section}
 ## Candidate Profile
 Name: {profile.get('name', 'Unknown')}
 Skills: {skills_str}
