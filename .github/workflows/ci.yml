@@ -84,3 +84,28 @@ jobs:
     
     - name: Run flake8
       run: flake8 agent/ --max-line-length=100 --ignore=E501,W503
+
+  deploy:
+    name: Deploy to Hugging Face Spaces
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [test, docker, lint]
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Sync to Hugging Face Spaces
+      uses: huggingface/huggingface-spaces-action@v0.1.0
+      with:
+        api_token: ${{ secrets.HF_TOKEN }}
+        owner: ${{ vars.HF_SPACE_OWNER || github.repository_owner }}
+        space_name: ${{ vars.HF_SPACE_NAME || 'job-agent' }}
+        directory: .
+        docker: true
+        commit_message: |
+          Auto-deploy from GitHub
+          
+          Commit: ${{ github.sha }}
+          Message: ${{ github.event.head_commit.message }}
