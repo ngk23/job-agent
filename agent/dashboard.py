@@ -559,6 +559,7 @@ def create_dashboard_app(config: AppConfig):
 <div class="auth-box">
   <h1>Job Agent</h1>
   <div class="subtitle">Sign in to your account</div>
+    {pending_msg}
   
   <form action="/login" method="post">
     <label>Email</label>
@@ -2609,7 +2610,11 @@ function escHtml(str) {
         if session.get('user_id'):
             return redirect(url_for('index'))
         if request.method == 'GET':
-            return render_template_string(LOGIN_HTML)
+            error_param = request.args.get('error', '')
+            pending_msg = ''
+            if error_param == 'pending':
+                pending_msg = '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(255,170,0,0.1);border:1px solid rgba(255,170,0,0.3);border-radius:8px;color:var(--warning);font-size:0.85em;">Your account is pending admin approval. Please wait for an admin to activate it.</div>'
+            return render_template_string(LOGIN_HTML.replace('{pending_msg}', pending_msg))
         # POST
         # Ensure the admin account exists and is active on every login
         ensure_admin_exists()
