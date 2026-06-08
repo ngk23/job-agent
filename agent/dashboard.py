@@ -2715,6 +2715,29 @@ function escHtml(str) {
   div.textContent = str || '';
   return div.innerHTML;
 }
+
+// Feedback summary stats loader
+async function loadFeedbackSummary() {
+  try {
+    const resp = await fetch('/api/my-feedback-stats');
+    const data = await resp.json();
+    const loading = document.getElementById('fsLoading');
+    const stats = document.getElementById('fsStats');
+    const empty = document.getElementById('fsEmpty');
+    loading.style.display = 'none';
+    if (data.total > 0) {
+      document.getElementById('fsUp').textContent = data.thumbs_up;
+      document.getElementById('fsDown').textContent = data.thumbs_down;
+      document.getElementById('fsRate').textContent = data.positivity_rate + '%';
+      stats.style.display = 'flex';
+    } else {
+      empty.style.display = 'block';
+    }
+  } catch (err) {
+    console.error('Failed to load feedback stats:', err);
+    document.getElementById('fsLoading').textContent = 'Could not load feedback stats';
+  }
+}
 </script>
 <!-- Hacking Animation Overlay -->
 <div class="hack-overlay" id="hackOverlay">
