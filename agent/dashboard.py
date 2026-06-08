@@ -4005,7 +4005,21 @@ function escHtml(str) {
             return jsonify({'status': 'ok'})
         return jsonify({'status': 'error', 'error': 'User not found or already processed'}), 404
 
-    @app.route('/admin/api/set-resend-key', methods=['POST'])
+    
+    @app.route('/admin/api/set-user-status/<int:target_user_id>/<string:new_status>', methods=['POST'])
+    @require_admin
+    def admin_set_user_status(target_user_id, new_status):
+        """Temporary: Set any user's status (active/pending/rejected)."""
+        from .database import update_user_status
+        if new_status not in ('active', 'pending', 'rejected'):
+            return jsonify({'status': 'error', 'error': 'Invalid status'}), 400
+        ok = update_user_status(target_user_id, new_status)
+        if ok:
+            logger.info(f"Admin set user {target_user_id} status to {new_status}")
+            return jsonify({'status': 'ok', 'message': f'User status set to {new_status}'})
+        return jsonify({'status': 'error', 'error': 'User not found'}), 404
+
+@app.route('/admin/api/set-resend-key', methods=['POST'])
     @require_admin
     def admin_set_resend_key():
         """Save the Resend API key to the admin's account."""
