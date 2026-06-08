@@ -4412,8 +4412,9 @@ def _init_persistent_data(config: AppConfig):
     def _copy_with_fallback(src_rel: str, dst_rel: str, backup_rel: str = None):
         src = project_root / src_rel
         dst = data_dir / dst_rel
-        if dst.exists():
-            return  # Already initialized
+        # Always copy job_agent.db to ensure test data is synced
+        if dst.exists() and 'job_agent.db' not in src_rel:
+            return  # Already initialized (skip existing files, but not DB)
         if src.exists():
             # Source is available (e.g. symlink target exists from previous run)
             shutil.copy2(str(src), str(dst))
