@@ -51,6 +51,35 @@ git push
 In your Space's **Settings → Repository Secrets**:
 - `ANTHROPIC_API_KEY` → Your Claude API key (get one at https://console.anthropic.com)
 
+### Optional: Enable Google Sign-In
+
+1. Get your Google OAuth credentials from [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. In your Space's **Settings → Repository Secrets**, add:
+   - `GOOGLE_CLIENT_ID` → Your Google OAuth client ID
+   - `GOOGLE_CLIENT_SECRET` → Your Google OAuth client secret
+   - `APP_URL` → `https://YOUR_USERNAME-job-agent.hf.space` (your Space's URL)
+3. In your Google Cloud Console, add this **Authorized redirect URI**:  
+   `https://YOUR_USERNAME-job-agent.hf.space/login/google/callback`
+
+Then restart your Space — the **Sign in with Google** button will be active.
+
+### Optional: Auto-Deploy from GitHub
+
+Set up CI/CD so your Space updates automatically every time you push code to GitHub:
+
+1. Get a **Hugging Face token** at **[hf.co/settings/tokens](https://huggingface.co/settings/tokens)** → **New token** → Scope: **write**
+2. In your **GitHub repo → Settings → Secrets and variables → Actions**, add:
+   - **Repository secret**: `HF_TOKEN` → paste your HF token
+   - **Repository variable** (optional if your Space name isn't `job-agent`): `HF_SPACE_NAME` → `your-space-name`
+   - **Repository variable** (optional if your GitHub username ≠ HF username): `HF_SPACE_OWNER` → `your-hf-username`
+3. Push to `main` — the workflow in `.github/workflows/ci.yml` will:
+   - ✅ Run tests (Python 3.10, 3.11, 3.12)
+   - ✅ Lint with flake8, black, isort
+   - ✅ Build Docker image
+   - 🚀 Deploy to your Hugging Face Space
+
+No more manual `git push` to HF — just push to GitHub and it auto-deploys.
+
 ### That's it!
 
 Your Space will build and start. Open the **App** tab to see the dashboard.  
