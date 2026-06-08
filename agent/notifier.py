@@ -11,8 +11,23 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Resend API key from environment variable
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+# Resend API key â€” checked in order:
+# 1. Runtime-set key (from dashboard admin panel, stored in DB)
+# 2. Environment variable (RESEND_API_KEY)
+_runtime_api_key: str = ""
+
+
+def set_resend_api_key(key: str):
+    """Set the Resend API key at runtime (from dashboard admin panel)."""
+    global _runtime_api_key
+    _runtime_api_key = key
+
+
+def _get_resend_api_key() -> str:
+    """Get the Resend API key, checking runtime key first, then env var."""
+    if _runtime_api_key:
+        return _runtime_api_key
+    return os.environ.get("RESEND_API_KEY", "")
 
 # Email configuration
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
@@ -23,22 +38,22 @@ APPROVED_SUBJECT = "Your Job Agent account has been approved!"
 APPROVED_BODY = """
 Hi {name},
 
-Your account on Job Agent has been approved! 🎉
+Your account on Job Agent has been approved! ðŸŽ‰
 
 You can now log in and start using the platform:
 {app_url}
 
 What you can do:
-• Upload your CV and let the AI analyze your profile
-• Search for jobs across LinkedIn, Indeed, Glassdoor, and Monster
-• Get AI-powered match scores for each job
-• Generate tailored CVs for high-match positions
-• Save your favorite jobs for later
+â€¢ Upload your CV and let the AI analyze your profile
+â€¢ Search for jobs across LinkedIn, Indeed, Glassdoor, and Monster
+â€¢ Get AI-powered match scores for each job
+â€¢ Generate tailored CVs for high-match positions
+â€¢ Save your favorite jobs for later
 
 Log in here: {app_url}
 
 Happy job hunting!
-— The Job Agent Team
+â€” The Job Agent Team
 """
 
 REJECTED_SUBJECT = "Your Job Agent registration was not approved"
@@ -49,7 +64,7 @@ Unfortunately, your registration request for Job Agent was not approved by the a
 
 If you believe this was a mistake, please contact the administrator directly.
 
-— The Job Agent Team
+â€” The Job Agent Team
 """
 
 
@@ -57,19 +72,20 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
     """Send an email using the configured provider.
     Returns True if sent successfully, False if not configured or failed.
     """
-    if RESEND_API_KEY:
-        return _send_via_resend(to_email, subject, body)
+    api_key = _get_resend_api_key()
+    if api_key:
+        return _send_via_resend(to_email, subject, body, api_key)
     else:
         logger.info(f"Email not sent (RESEND_API_KEY not configured). Would send to {to_email}: {subject}")
-        logger.info(f"Set RESEND_API_KEY env var to enable email notifications.")
+        logger.info(f"Set RESEND_API_KEY env var or configure in Admin panel to enable email notifications.")
         return False
 
 
-def _send_via_resend(to_email: str, subject: str, body: str) -> bool:
+def _send_via_resend(to_email: str, subject: str, body: str, api_key: str) -> bool:
     """Send email via Resend API."""
     try:
         import resend
-        resend.api_key = RESEND_API_KEY
+        resend.api_key = api_key
         
         params = {
             "from": EMAIL_FROM,
@@ -114,7 +130,7 @@ Click the link below to reset your password (valid for 1 hour):
 
 If you did not request a password reset, you can safely ignore this email.
 
-— The Job Agent Team
+â€” The Job Agent Team
 """
 
 
