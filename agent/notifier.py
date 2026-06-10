@@ -118,7 +118,7 @@ def _send_via_gmail(to_email: str, subject: str, body: str, gmail_user: str, gma
         body_html = body.replace("\n", "<br>")
         msg.attach(MIMEText(body_html, "html"))
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
             server.login(gmail_user, gmail_app_password)
             server.sendmail(gmail_user, to_email, msg.as_string())
 

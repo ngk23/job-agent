@@ -68,7 +68,7 @@ def send_password_reset_email(user_email: str, user_name: str, reset_token: str)
         msg.attach(MIMEText(text.strip(), "plain"))
         msg.attach(MIMEText(html, "html"))
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
             server.login(gmail_user, gmail_app_password)
             server.sendmail(gmail_user, user_email, msg.as_string())
 
