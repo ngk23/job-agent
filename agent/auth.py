@@ -116,15 +116,17 @@ def require_login(f: Callable) -> Callable:
 
 
 def require_admin(f: Callable) -> Callable:
-    """Decorator: require admin role."""
+    """Decorator: require admin role.
+    For JSON/API endpoints, returns 401/403 instead of redirecting.
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get("user_id"):
-            if request.is_json:
+            if request.is_json or request.path.startswith("/api/") or request.path.startswith("/admin/"):
                 return jsonify({"error": "Authentication required"}), 401
             return redirect(url_for("login_page"))
         if session.get("user_role") != "admin":
-            if request.is_json:
+            if request.is_json or request.path.startswith("/api/") or request.path.startswith("/admin/"):
                 return jsonify({"error": "Admin access required"}), 403
             return "Admin access required", 403
         return f(*args, **kwargs)
