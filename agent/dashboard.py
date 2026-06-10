@@ -41,7 +41,8 @@ from .auth import (
     DEFAULT_ADMIN_EMAIL,
     DEFAULT_ADMIN_PASSWORD,
 )
-from .notifier import notify_approved, notify_rejected, send_password_reset_email, set_resend_api_key, _get_resend_api_key
+from .notifier import notify_approved, notify_rejected, set_resend_api_key, _get_resend_api_key
+from .email_utils import send_password_reset_email
 from .feedback_learning import get_feedback_insights_short
 from .database import (
     init_db,

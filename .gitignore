@@ -120,6 +120,11 @@ resume.pdf
 resume.txt
 *.pdf
 
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
 # OS files
 .DS_Store
 Thumbs.db

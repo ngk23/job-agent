@@ -15,14 +15,14 @@ EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
 APP_URL = os.environ.get("APP_URL", "https://gouklkrishan-job-agent.hf.space")
 
 
-def send_password_reset_email(to_email: str, reset_token: str, user_name: str = "") -> bool:
+def send_password_reset_email(user_email: str, user_name: str, reset_token: str) -> bool:
     """
     Send a password reset email with a secure token link.
 
     Args:
-        to_email: The recipient's email address
+        user_email: The recipient's email address
+        user_name: The user's name (used in greeting)
         reset_token: The password reset token
-        user_name: The user's name (optional, used in greeting)
 
     Returns:
         True if email was sent successfully, False otherwise
@@ -30,7 +30,7 @@ def send_password_reset_email(to_email: str, reset_token: str, user_name: str = 
     api_key = _get_resend_api_key()
     if not api_key:
         logger.info(
-            f"Password reset email not sent to {to_email} "
+            f"Password reset email not sent to {user_email} "
             f"(RESEND_API_KEY not configured)"
         )
         return False
@@ -64,7 +64,7 @@ def send_password_reset_email(to_email: str, reset_token: str, user_name: str = 
 
         params = {
             "from": EMAIL_FROM,
-            "to": [to_email],
+            "to": [user_email],
             "subject": subject,
             "html": html,
             "text": text.strip(),
@@ -72,7 +72,7 @@ def send_password_reset_email(to_email: str, reset_token: str, user_name: str = 
 
         response = resend.Emails.send(params)
         logger.info(
-            f"Password reset email sent to {to_email} (id: {response.get('id', 'unknown')})"
+            f"Password reset email sent to {user_email} (id: {response.get('id', 'unknown')})"
         )
         return True
 
@@ -80,5 +80,5 @@ def send_password_reset_email(to_email: str, reset_token: str, user_name: str = 
         logger.warning("resend package not installed. Run: pip install resend")
         return False
     except Exception as e:
-        logger.error(f"Failed to send password reset email to {to_email}: {e}")
+        logger.error(f"Failed to send password reset email to {user_email}: {e}")
         return False
