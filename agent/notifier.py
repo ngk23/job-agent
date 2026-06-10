@@ -29,6 +29,7 @@ def set_gmail_credentials(gmail_user: str, gmail_app_password: str):
 
 def _get_gmail_credentials() -> tuple:
     """Get Gmail SMTP credentials: runtime first, env vars fallback, then database."""
+    global _runtime_gmail_user, _runtime_gmail_app_password
     if _runtime_gmail_user and _runtime_gmail_app_password:
         return _runtime_gmail_user, _runtime_gmail_app_password
 
@@ -48,7 +49,6 @@ def _get_gmail_credentials() -> tuple:
             ("admin",),
         ).fetchone()
         if row and row["gmail_user"] and row["gmail_app_password"]:
-            global _runtime_gmail_user, _runtime_gmail_app_password
             _runtime_gmail_user = row["gmail_user"]
             _runtime_gmail_app_password = row["gmail_app_password"]
             return _runtime_gmail_user, _runtime_gmail_app_password
