@@ -1,60 +1,68 @@
 """
 Email notification module for Job Agent.
 Sends email notifications when admin approves or rejects a user.
-Uses Resend (recommended) as primary email API.
+Uses Gmail SMTP as the email provider.
 Falls back quietly if no email service is configured.
 """
 
 import logging
 import os
-from typing import Optional
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 logger = logging.getLogger(__name__)
 
-# Resend API key — checked in order:
-# 1. Runtime-set key (from dashboard admin panel, stored in DB)
-# 2. Environment variable (RESEND_API_KEY)
-_runtime_api_key: str = ""
+# Gmail SMTP credentials — checked in order:
+# 1. Runtime-set (from dashboard admin panel, stored in DB)
+# 2. Environment variables (GMAIL_USER, GMAIL_APP_PASSWORD)
+_runtime_gmail_user: str = ""
+_runtime_gmail_app_password: str = ""
 
 
-def set_resend_api_key(key: str):
-    """Set the Resend API key at runtime (from dashboard admin panel)."""
-    global _runtime_api_key
-    _runtime_api_key = key
+def set_gmail_credentials(gmail_user: str, gmail_app_password: str):
+    """Set Gmail SMTP credentials at runtime (from dashboard admin panel)."""
+    global _runtime_gmail_user, _runtime_gmail_app_password
+    _runtime_gmail_user = gmail_user
+    _runtime_gmail_app_password = gmail_app_password
 
 
-def _get_resend_api_key() -> str:
-    """Get the Resend API key, checking runtime key first, then env var, then database."""
-    if _runtime_api_key:
-        return _runtime_api_key
-    key = os.environ.get("RESEND_API_KEY", "")
-    if key:
-        return key
-    # Fallback: check database for any admin user's saved key
+def _get_gmail_credentials() -> tuple:
+    """Get Gmail SMTP credentials: runtime first, env vars fallback, then database."""
+    if _runtime_gmail_user and _runtime_gmail_app_password:
+        return _runtime_gmail_user, _runtime_gmail_app_password
+
+    user = os.environ.get("GMAIL_USER", "")
+    app_pw = os.environ.get("GMAIL_APP_PASSWORD", "")
+    if user and app_pw:
+        return user, app_pw
+
+    # Fallback: check database for any admin user's saved credentials
     try:
         from .database import get_db
         conn = get_db()
         row = conn.execute(
-            "SELECT resend_api_key FROM users WHERE role = ? AND resend_api_key IS NOT NULL AND resend_api_key != '' LIMIT 1",
+            "SELECT gmail_user, gmail_app_password FROM users WHERE role = ? "
+            "AND gmail_user IS NOT NULL AND gmail_user != '' "
+            "AND gmail_app_password IS NOT NULL AND gmail_app_password != '' LIMIT 1",
             ("admin",),
         ).fetchone()
-        if row and row["resend_api_key"]:
-            key = row["resend_api_key"]
-            # Cache it in runtime for next time
-            global _runtime_api_key
-            _runtime_api_key = key
-            return key
+        if row and row["gmail_user"] and row["gmail_app_password"]:
+            global _runtime_gmail_user, _runtime_gmail_app_password
+            _runtime_gmail_user = row["gmail_user"]
+            _runtime_gmail_app_password = row["gmail_app_password"]
+            return _runtime_gmail_user, _runtime_gmail_app_password
     except Exception:
         pass
-    return ""
+    return ("", "")
+
 
 # Email configuration
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
 APP_URL = os.environ.get("APP_URL", "https://gouklkrishan-job-agent.hf.space")
 
 # Base subject and body templates
 APPROVED_SUBJECT = "Your Job Agent account has been approved!"
-APPROVED_BODY = """
+APPROVED_BODY = """\
 Hi {name},
 
 Your account on Job Agent has been approved! 🎉
@@ -76,7 +84,7 @@ Happy job hunting!
 """
 
 REJECTED_SUBJECT = "Your Job Agent registration was not approved"
-REJECTED_BODY = """
+REJECTED_BODY = """\
 Hi {name},
 
 Unfortunately, your registration request for Job Agent was not approved by the admin.
@@ -88,58 +96,55 @@ If you believe this was a mistake, please contact the administrator directly.
 
 
 def send_email(to_email: str, subject: str, body: str) -> bool:
-    """Send an email using the configured provider.
+    """Send an email using Gmail SMTP.
     Returns True if sent successfully, False if not configured or failed.
     """
-    api_key = _get_resend_api_key()
-    if api_key:
-        return _send_via_resend(to_email, subject, body, api_key)
+    gmail_user, gmail_app_password = _get_gmail_credentials()
+    if gmail_user and gmail_app_password:
+        return _send_via_gmail(to_email, subject, body, gmail_user, gmail_app_password)
     else:
-        logger.info(f"Email not sent (RESEND_API_KEY not configured). Would send to {to_email}: {subject}")
-        logger.info(f"Set RESEND_API_KEY env var or configure in Admin panel to enable email notifications.")
+        logger.info(f"Email not sent (Gmail SMTP not configured). Would send to {to_email}: {subject}")
+        logger.info("Set GMAIL_USER and GMAIL_APP_PASSWORD env vars or configure in Admin panel.")
         return False
 
 
-def _send_via_resend(to_email: str, subject: str, body: str, api_key: str) -> bool:
-    """Send email via Resend API."""
+def _send_via_gmail(to_email: str, subject: str, body: str, gmail_user: str, gmail_app_password: str) -> bool:
+    """Send email via Gmail SMTP."""
     try:
-        import resend
-        resend.api_key = api_key
-        
-        params = {
-            "from": EMAIL_FROM,
-            "to": [to_email],
-            "subject": subject,
-            "text": body.strip(),
-        }
-        
-        response = resend.Emails.send(params)
-        logger.info(f"Email sent to {to_email}: {subject} (id: {response.get('id', 'unknown')})")
+        msg = MIMEMultipart()
+        msg["From"] = gmail_user
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        body_html = body.replace("\n", "<br>")
+        msg.attach(MIMEText(body_html, "html"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(gmail_user, gmail_app_password)
+            server.sendmail(gmail_user, to_email, msg.as_string())
+
+        logger.info(f"Email sent to {to_email}: {subject}")
         return True
-    except ImportError:
-        logger.warning("resend package not installed. Run: pip install resend")
-        return False
     except Exception as e:
-        logger.error(f"Failed to send email via Resend to {to_email}: {e}")
+        logger.error(f"Failed to send email via Gmail SMTP to {to_email}: {e}")
         return False
 
 
 def notify_approved(user_email: str, user_name: str) -> bool:
     """Send approval notification email to a user."""
     body = APPROVED_BODY.format(name=user_name, app_url=APP_URL)
-    logger.info(f"Sending approval email to {user_email} via {EMAIL_FROM}")
+    logger.info(f"Sending approval email to {user_email}")
     return send_email(user_email, APPROVED_SUBJECT, body)
 
 
 def notify_rejected(user_email: str, user_name: str) -> bool:
     """Send rejection notification email to a user."""
     body = REJECTED_BODY.format(name=user_name, app_url=APP_URL)
-    logger.info(f"Sending rejection email to {user_email} via {EMAIL_FROM}")
+    logger.info(f"Sending rejection email to {user_email}")
     return send_email(user_email, REJECTED_SUBJECT, body)
 
 
 PASSWORD_RESET_SUBJECT = "Reset your Job Agent password"
-PASSWORD_RESET_BODY = """
+PASSWORD_RESET_BODY = """\
 Hi {name},
 
 We received a request to reset your password for your Job Agent account.

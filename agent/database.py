@@ -95,6 +95,8 @@ def init_db():
     _migrate_add_column("users", "status", "TEXT DEFAULT 'active'")
     _migrate_add_column("users", "password_changed", "INTEGER DEFAULT 1")
     _migrate_add_column("users", "resend_api_key", "TEXT DEFAULT ''")
+    _migrate_add_column("users", "gmail_user", "TEXT DEFAULT ''")
+    _migrate_add_column("users", "gmail_app_password", "TEXT DEFAULT ''")
 
     # Create password_reset_tokens table
     conn.executescript("""
@@ -256,6 +258,17 @@ def update_user_resend_key(user_id: int, resend_key: str):
     """Update a user's Resend API key (stored in database)."""
     conn = get_db()
     conn.execute("UPDATE users SET resend_api_key = ? WHERE id = ?", (resend_key, user_id))
+    conn.commit()
+    return True
+
+
+def update_gmail_credentials(user_id: int, gmail_user: str, gmail_app_password: str):
+    """Update a user's Gmail SMTP credentials (stored in database)."""
+    conn = get_db()
+    conn.execute(
+        "UPDATE users SET gmail_user = ?, gmail_app_password = ? WHERE id = ?",
+        (gmail_user, gmail_app_password, user_id),
+    )
     conn.commit()
     return True
 
