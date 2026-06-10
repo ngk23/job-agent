@@ -30,18 +30,20 @@ def _get_resend_api_key() -> str:
     key = os.environ.get("RESEND_API_KEY", "")
     if key:
         return key
-    # Fallback: check database for the admin user's saved key
+    # Fallback: check database for any admin user's saved key
     try:
-        from .database import get_user_by_email as _db_get_user
-        from .auth import DEFAULT_ADMIN_EMAIL
-        admin = _db_get_user(DEFAULT_ADMIN_EMAIL)
-        if admin and admin.get("resend_api_key"):
-            key = admin["resend_api_key"]
-            if key:
-                # Cache it in runtime for next time
-                global _runtime_api_key
-                _runtime_api_key = key
-                return key
+        from .database import get_db
+        conn = get_db()
+        row = conn.execute(
+            "SELECT resend_api_key FROM users WHERE role = ? AND resend_api_key IS NOT NULL AND resend_api_key != '' LIMIT 1",
+            ("admin",),
+        ).fetchone()
+        if row and row["resend_api_key"]:
+            key = row["resend_api_key"]
+            # Cache it in runtime for next time
+            global _runtime_api_key
+            _runtime_api_key = key
+            return key
     except Exception:
         pass
     return ""
