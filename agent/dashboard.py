@@ -41,7 +41,7 @@ from .auth import (
     DEFAULT_ADMIN_EMAIL,
     DEFAULT_ADMIN_PASSWORD,
 )
-from .notifier import notify_approved, notify_rejected, set_resend_api_key, _get_resend_api_key
+from .notifier import notify_approved, notify_rejected, set_gmail_credentials, _get_gmail_credentials
 from .email_utils import send_password_reset_email
 from .feedback_learning import get_feedback_insights_short
 from .database import (
@@ -85,7 +85,7 @@ from .database import (
     get_active_users_count,
     get_user_activity_stats,
     save_feedback,
-    get_feedback_summary,    update_user_resend_key,
+    get_feedback_summary,    update_user_resend_key,    update_gmail_credentials,
 )
 logger = logging.getLogger(__name__)
 
@@ -265,14 +265,14 @@ def create_dashboard_app(config: AppConfig):
     ensure_admin_exists()
     # Clean up expired saved jobs (older than 7 days)
     cleanup_old_saved_jobs(days=7)
-    # Load saved Resend API key from database
+    # Load saved Gmail SMTP credentials from database
     try:
         admin_user = db_get_user_by_email(DEFAULT_ADMIN_EMAIL)
-        if admin_user and admin_user.get("resend_api_key"):
-            set_resend_api_key(admin_user["resend_api_key"])
-            logger.info("Loaded Resend API key from database")
+        if admin_user and admin_user.get("gmail_user") and admin_user.get("gmail_app_password"):
+            set_gmail_credentials(admin_user["gmail_user"], admin_user["gmail_app_password"])
+            logger.info("Loaded Gmail SMTP credentials from database")
     except Exception as e:
-        logger.warning("Could not load Resend API key from DB: %s", e)
+        logger.warning("Could not load Gmail SMTP credentials from DB: %s", e)
 
     tracker = ApplicationTracker(data_dir=config.data_dir)
 
@@ -3927,13 +3927,13 @@ async function handleReset(e) {
     <div class="sum-item"><span class="sum-num">{len_users}</span> Registered Users</div>
     <div class="sum-item"><span class="sum-num">{pending_count}</span> Pending ⏳</div>
     <div class="sum-item"><span class="sum-num" id="activeNowCount">-</span> Active Now <span class="pulse online"></span></div>
-  <div class="resend-section" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px;">
-    <h3 style="color:var(--accent);margin-bottom:12px;font-size:0.95em;letter-spacing:1px;">@ Email Notifications (Resend)</h3>
+  <div class="gmail-section" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px;">
+    <h3 style="color:var(--accent);margin-bottom:12px;font-size:0.95em;letter-spacing:1px;">@ Email Notifications (Gmail SMTP)</h3>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <input type="password" id="resendKeyInput" placeholder="re_... paste your Resend API key here"
+      <input type="email" id="gmailUserInput" placeholder="yourname@gmail.com"
         style="flex:1;min-width:200px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Share Tech Mono',monospace;font-size:0.85em;outline:none;">
-      <button onclick="setResendKey()" style="padding:8px 16px;background:transparent;border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:0.85em;cursor:pointer;">SAVE</button>
-      <span id="resendKeyStatus" style="font-size:0.8em;color:var(--text-dim);">Not configured</span>
+      <button onclick="saveGmailCredentials()" style="padding:8px 16px;background:transparent;border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:0.85em;cursor:pointer;">SAVE</button>
+      <span id="gmailStatus" style="font-size:0.8em;color:var(--text-dim);">Not configured</span>
     </div>
   </div>
 
@@ -3979,25 +3979,31 @@ async function handleReset(e) {
 <script>
 // Admin Panel JS
 
-async function setResendKey() {
-  const key = document.getElementById('resendKeyInput').value.trim();
-  if (!key || !key.startsWith('re_')) {
-    alert('Invalid Resend API key (must start with re_)');
+async function saveGmailCredentials() {
+  const user = document.getElementById('gmailUserInput').value.trim();
+  const appPw = document.getElementById('gmailAppPasswordInput').value.trim();
+  if (!user || !appPw) {
+    alert('Please enter both Gmail address and app password');
     return;
   }
-  const statusEl = document.getElementById('resendKeyStatus');
+  if (!user.includes('@')) {
+    alert('Please enter a valid Gmail address');
+    return;
+  }
+  const statusEl = document.getElementById('gmailStatus');
   statusEl.textContent = 'Saving...';
   try {
     const resp = await fetch('/admin/api/set-resend-key', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resend_api_key: key })
+      body: JSON.stringify({ gmail_user: user, gmail_app_password: appPw })
     });
     const data = await resp.json();
     if (data.status === 'ok') {
       statusEl.textContent = 'Configured';
       statusEl.style.color = 'var(--primary)';
-      document.getElementById('resendKeyInput').disabled = true;
+      document.getElementById('gmailUserInput').disabled = true;
+      document.getElementById('gmailAppPasswordInput').disabled = true;
     } else {
       statusEl.textContent = 'Failed: ' + (data.error || 'Unknown');
     }
@@ -4189,18 +4195,23 @@ function escHtml(str) {
     def admin_set_resend_key():
         """Save the Resend API key to the admin's account."""
         data = request.get_json()
-        if not data or not data.get('resend_api_key'):
-            return jsonify({'status': 'error', 'error': 'API key required'}), 400
+        if not data or not data.get('gmail_user') or not data.get('gmail_app_password'):
+            return jsonify({'status': 'error', 'error': 'Gmail user and app password required'}), 400
+        if '@' not in data.get('gmail_user', ''):
+            return jsonify({'status': 'error', 'error': 'Invalid Gmail address'}), 400
         uid = get_user_id()
         if not uid:
             return jsonify({'status': 'error', 'error': 'Not authenticated'}), 401
-        api_key = data['resend_api_key'].strip()
-        ok = update_user_resend_key(uid, api_key)
+        gmail_user = data['gmail_user'].strip()
+        gmail_app_password = data['gmail_app_password'].strip()
+        if not gmail_user or not gmail_app_password:
+            return jsonify({'status': 'error', 'error': 'Gmail user and app password required'}), 400
+        ok = update_gmail_credentials(uid, gmail_user, gmail_app_password)
         if ok:
-            set_resend_api_key(api_key)
-            logger.info("Resend API key saved for admin user %s", uid)
+            set_gmail_credentials(gmail_user, gmail_app_password)
+            logger.info("Gmail SMTP credentials saved for admin user %s", uid)
             return jsonify({'status': 'ok', 'message': 'Email notifications configured!'})
-        return jsonify({'status': 'error', 'error': 'Failed to save key'}), 500
+        return jsonify({'status': 'error', 'error': 'Failed to save credentials'}), 500
 
     @app.route('/admin/api/user-apps/<int:target_user_id>')
     @require_admin
