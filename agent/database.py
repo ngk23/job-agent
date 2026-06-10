@@ -257,6 +257,7 @@ def update_user_resend_key(user_id: int, resend_key: str):
     conn = get_db()
     conn.execute("UPDATE users SET resend_api_key = ? WHERE id = ?", (resend_key, user_id))
     conn.commit()
+    return True
 
 
 def update_user_role(user_id: int, role: str) -> bool:
