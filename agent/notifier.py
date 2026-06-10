@@ -24,10 +24,27 @@ def set_resend_api_key(key: str):
 
 
 def _get_resend_api_key() -> str:
-    """Get the Resend API key, checking runtime key first, then env var."""
+    """Get the Resend API key, checking runtime key first, then env var, then database."""
     if _runtime_api_key:
         return _runtime_api_key
-    return os.environ.get("RESEND_API_KEY", "")
+    key = os.environ.get("RESEND_API_KEY", "")
+    if key:
+        return key
+    # Fallback: check database for the admin user's saved key
+    try:
+        from .database import get_user_by_email as _db_get_user
+        from .auth import DEFAULT_ADMIN_EMAIL
+        admin = _db_get_user(DEFAULT_ADMIN_EMAIL)
+        if admin and admin.get("resend_api_key"):
+            key = admin["resend_api_key"]
+            if key:
+                # Cache it in runtime for next time
+                global _runtime_api_key
+                _runtime_api_key = key
+                return key
+    except Exception:
+        pass
+    return ""
 
 # Email configuration
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
