@@ -3932,6 +3932,8 @@ async function handleReset(e) {
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <input type="email" id="gmailUserInput" placeholder="yourname@gmail.com"
         style="flex:1;min-width:200px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Share Tech Mono',monospace;font-size:0.85em;outline:none;">
+      <input type="password" id="gmailAppPasswordInput" placeholder="16-char Gmail App Password"
+        style="flex:1;min-width:200px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Share Tech Mono',monospace;font-size:0.85em;outline:none;">
       <button onclick="saveGmailCredentials()" style="padding:8px 16px;background:transparent;border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:0.85em;cursor:pointer;">SAVE</button>
       <span id="gmailStatus" style="font-size:0.8em;color:var(--text-dim);">Not configured</span>
     </div>
