@@ -38,10 +38,21 @@ def _get_gmail_credentials() -> tuple:
     if user and app_pw:
         return user, app_pw
 
-    # Fallback: check database for any admin user's saved credentials
+    # Fallback: check database for any user's saved credentials
+    # First by specific admin email, then by role, then any user
     try:
-        from .database import get_db
+        from .database import get_db, get_user_by_email
         conn = get_db()
+
+        # Try 1: Look up the default admin email specifically
+        from .auth import DEFAULT_ADMIN_EMAIL
+        admin_user = get_user_by_email(DEFAULT_ADMIN_EMAIL)
+        if admin_user and admin_user.get("gmail_user") and admin_user.get("gmail_app_password"):
+            _runtime_gmail_user = admin_user["gmail_user"]
+            _runtime_gmail_app_password = admin_user["gmail_app_password"]
+            return _runtime_gmail_user, _runtime_gmail_app_password
+
+        # Try 2: Any user with role='admin' that has gmail credentials
         row = conn.execute(
             "SELECT gmail_user, gmail_app_password FROM users WHERE role = ? "
             "AND gmail_user IS NOT NULL AND gmail_user != '' "
@@ -52,8 +63,19 @@ def _get_gmail_credentials() -> tuple:
             _runtime_gmail_user = row["gmail_user"]
             _runtime_gmail_app_password = row["gmail_app_password"]
             return _runtime_gmail_user, _runtime_gmail_app_password
-    except Exception:
-        pass
+
+        # Try 3: Any user at all (in case roles are weird)
+        row = conn.execute(
+            "SELECT gmail_user, gmail_app_password FROM users "
+            "WHERE gmail_user IS NOT NULL AND gmail_user != '' "
+            "AND gmail_app_password IS NOT NULL AND gmail_app_password != '' LIMIT 1",
+        ).fetchone()
+        if row and row["gmail_user"] and row["gmail_app_password"]:
+            _runtime_gmail_user = row["gmail_user"]
+            _runtime_gmail_app_password = row["gmail_app_password"]
+            return _runtime_gmail_user, _runtime_gmail_app_password
+    except Exception as e:
+        logger.warning("Gmail credential DB lookup failed: %s", e)
     return ("", "")
 
 
