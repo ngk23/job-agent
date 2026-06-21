@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 class AIClient:
-    """Client for Claude AI integration."""
+    """Client for AI integration via OpenRouter (free models)."""
     
-    # OpenRouter uses its own model IDs (e.g. anthropic/claude-sonnet-4)
+    # OpenRouter free model (Google Gemini 2.0 Flash - fast, free, great for structured output)
 
     def __init__(self, config: AppConfig):
         self.config = config
@@ -38,7 +38,7 @@ class AIClient:
         Uses OpenRouter via the OpenAI SDK."""
         if self.openai_client:
             response = self.openai_client.chat.completions.create(
-                model="anthropic/claude-sonnet-4",
+                model="google/gemini-2.0-flash-exp:free",
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -280,7 +280,7 @@ Rules:
         return data
 
     def tailor_application(self, profile: Dict[str, Any], job: Job, resume_text: str = "") -> AIResult:
-        """Use Claude to score job match and write tailored cover letter."""
+        """Use AI to score job match and write tailored cover letter."""
         if not self.is_available:
             raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
         
