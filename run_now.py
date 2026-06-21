@@ -1,9 +1,10 @@
-"""Temporary runner script."""
+"""Temporary runner script.
+
+Set your OPENROUTER_API_KEY environment variable before running.
+"""
 import os
 import subprocess
 import sys
-
-os.environ["ANTHROPIC_API_KEY"] = "[REDACTED]"
 
 result = subprocess.run(
     [sys.executable, "-m", "agent", "run", "--headless"],

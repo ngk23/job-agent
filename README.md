@@ -49,7 +49,7 @@ git push
 ### Set your API Key
 
 In your Space's **Settings → Repository Secrets**:
-- `ANTHROPIC_API_KEY` → Your Claude API key (get one at https://console.anthropic.com)
+- `OPENROUTER_API_KEY` → Your OpenRouter API key (get one at https://openrouter.ai)
 
 ### Optional: Enable Google Sign-In
 
@@ -95,11 +95,13 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 2. Set your Anthropic API key
+### 2. Set your API key
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENROUTER_API_KEY="sk-or-..."
 ```
-Get one free at https://console.anthropic.com
+Get a free key at https://openrouter.ai
+
+
 
 ### 3. Run the dashboard
 ```bash
@@ -157,7 +159,7 @@ python -m agent run --headless
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ANTHROPIC_API_KEY` | Your Claude API key | Required |
+| `OPENROUTER_API_KEY` | Your OpenRouter API key | Required |
 | `DASHBOARD_HOST` | Web dashboard host | `127.0.0.1` (or `0.0.0.0` on HF Spaces) |
 | `DASHBOARD_PORT` | Web dashboard port | `8080` (or `7860` on HF Spaces) |
 | `HEADLESS` | Run browser invisibly | `false` |

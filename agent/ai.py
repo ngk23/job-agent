@@ -1,12 +1,11 @@
 """
 AI integration for job application tailoring.
+Uses OpenRouter (via OpenAI SDK) for all AI operations.
 """
 
 import json
 import logging
 from typing import Dict, Any, List, Optional
-
-import anthropic
 
 from .models import AIResult, Job
 from .config import AppConfig
@@ -21,12 +20,9 @@ class AIClient:
 
     def __init__(self, config: AppConfig):
         self.config = config
-        self.client = None
         self.feedback_insights = ""
-        if config.anthropic_api_key:
-            self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
-        elif config.openrouter_api_key:
-            # Use OpenAI SDK for OpenRouter (Anthropic SDK has URL path mismatch)
+        self.openai_client = None
+        if config.openrouter_api_key:
             from openai import OpenAI
             self.openai_client = OpenAI(
                 base_url="https://openrouter.ai/api/v1",
@@ -36,26 +32,18 @@ class AIClient:
                     "X-Title": "Job Application Agent",
                 },
             )
-            # Keep self.client as None so _call() routes to openai_client
 
     def _call(self, prompt: str, max_tokens: int = 2000) -> str:
         """Send a prompt to the AI and return the text response.
-        Routes to correct backend (Anthropic SDK or OpenRouter via OpenAI SDK)."""
-        if self.client:
-            response = self.client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.content[0].text.strip()
-        elif hasattr(self, 'openai_client') and self.openai_client:
+        Uses OpenRouter via the OpenAI SDK."""
+        if self.openai_client:
             response = self.openai_client.chat.completions.create(
                 model="anthropic/claude-sonnet-4",
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
             return response.choices[0].message.content.strip()
-        raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+        raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
 
     def _strip_fences(self, text: str) -> str:
         """Strip markdown code fences from AI response."""
@@ -69,7 +57,7 @@ class AIClient:
 
     @property
     def is_available(self) -> bool:
-        return self.client is not None or (hasattr(self, 'openai_client') and self.openai_client is not None)
+        return self.openai_client is not None
     
     def generate_cv(self, profile: Dict[str, Any], jobs: List[Dict[str, Any]], score_range: str, resume_text: str = "") -> str:
         """Generate a tailored CV for a group of jobs in a score range.
@@ -84,7 +72,7 @@ class AIClient:
             Generated CV as a formatted string
         """
         if not self.is_available:
-            raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
         
         skills_str = ', '.join(profile.get('skills', []))
         roles_str = ', '.join(profile.get('target_roles', []))
@@ -155,7 +143,7 @@ Return ONLY the CV text, properly formatted with clear sections. Do not include 
             List of suggested target role titles to search for
         """
         if not self.is_available:
-            raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
         
         current_roles_str = ', '.join(current_roles) if current_roles else 'Not specified'
         
@@ -195,7 +183,7 @@ Do not include any other text or explanation."""
         Uses a simpler prompt that scores based on title + skills alignment.
         """
         if not self.is_available:
-            raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
 
         skills_str = ', '.join(profile.get('skills', []))
         roles_str = ', '.join(profile.get('target_roles', []))
@@ -252,7 +240,7 @@ Respond in JSON only:
         experience, education, and suggested target roles.
         """
         if not self.is_available:
-            raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
 
         prompt = f"""You are an expert resume parser. Extract a structured profile from the following resume/CV text.
 
@@ -294,7 +282,7 @@ Rules:
     def tailor_application(self, profile: Dict[str, Any], job: Job, resume_text: str = "") -> AIResult:
         """Use Claude to score job match and write tailored cover letter."""
         if not self.is_available:
-            raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
         
         skills_str = ', '.join(profile.get('skills', []))
         roles_str = ', '.join(profile.get('target_roles', []))

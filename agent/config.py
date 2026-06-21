@@ -25,11 +25,10 @@ def validate_config(config: "AppConfig") -> bool:
 
 def validate_config_run(config: "AppConfig") -> bool:
     """Validate configuration specifically for the 'run' command (requires API key)."""
-    if not config.anthropic_api_key and not config.openrouter_api_key:
-        print("[ERROR] No API key found. Set one of:")
-        print('   ANTHROPIC_API_KEY="sk-ant-..."  (direct Anthropic)')
+    if not config.openrouter_api_key:
+        print("[ERROR] No API key found. Set:")
         print('   OPENROUTER_API_KEY="sk-or-..."   (via OpenRouter, free tier available)')
-        print("Get an OpenRouter key at https://openrouter.ai")
+        print("Get a free key at https://openrouter.ai")
         return False
     return True
 
@@ -40,7 +39,6 @@ class AppConfig:
 
     # API Keys
     openrouter_api_key: str = ""
-    anthropic_api_key: str = ""
 
     # Profile
     profile_path: str = "profiles/profile.json"
@@ -74,7 +72,6 @@ class AppConfig:
     def __post_init__(self):
         """Load config from environment variables."""
         self.openrouter_api_key = get_env("OPENROUTER_API_KEY", self.openrouter_api_key)
-        self.anthropic_api_key = get_env("ANTHROPIC_API_KEY", self.anthropic_api_key)
         self.profile_path = get_env("PROFILE_PATH", self.profile_path)
         self.resume_path = get_env("RESUME_PATH", self.resume_path) or self.resume_path
         self.headless = get_env("HEADLESS", "false").lower() == "true" or self.headless
@@ -133,7 +130,7 @@ class AppConfig:
     @property
     def is_valid(self) -> bool:
         """Check if configuration is valid for running."""
-        return bool(self.anthropic_api_key or self.openrouter_api_key)
+        return bool(self.openrouter_api_key)
 
 
 def load_profile(path: str = "profiles/profile.json") -> Dict[str, Any]:

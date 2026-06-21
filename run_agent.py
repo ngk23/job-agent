@@ -1,7 +1,7 @@
 """Launcher script - runs the job agent.
 
-Set your ANTHROPIC_API_KEY environment variable before running:
-    export ANTHROPIC_API_KEY="sk-ant-..."
+Set your OPENROUTER_API_KEY environment variable before running:
+    export OPENROUTER_API_KEY="sk-or-..."
     python run_agent.py
 """
 import os

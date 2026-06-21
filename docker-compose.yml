@@ -9,7 +9,7 @@ services:
       - ./logs:/app/logs
       - ./resume.pdf:/app/resume.pdf:ro
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - AUTO_APPLY=false
       - MIN_SCORE=70
       - MAX_APPLICATIONS=10

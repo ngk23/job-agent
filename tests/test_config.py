@@ -30,12 +30,13 @@ class TestAppConfig:
         # Cleanup
         del os.environ["MIN_SCORE"]
     
-    def test_is_valid_without_api_key(self):
+    def test_is_valid_without_api_key(self, monkeypatch):
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         config = AppConfig()
         assert config.is_valid is False
     
     def test_is_valid_with_api_key(self, monkeypatch):
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-key")
         config = AppConfig()
         assert config.is_valid is True
 

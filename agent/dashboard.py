@@ -145,15 +145,15 @@ def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = N
     env = os.environ.copy()
     # Use the API key from the config (passed from the dashboard app)
     if not api_key:
-        api_key = env.get("ANTHROPIC_API_KEY", "") or env.get("OPENROUTER_API_KEY", "")
+        api_key = env.get("OPENROUTER_API_KEY", "")
     if not api_key:
         _output_queue.put("[ERROR] No API key configured. Cannot run agent.\n")
-        _output_queue.put("[ERROR] Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY in environment/secret.\n")
+        _output_queue.put("[ERROR] Set OPENROUTER_API_KEY in environment/secret.\n")
         _run_complete = True
         return
-    # Ensure the subprocess has the key (either Anthropic or OpenRouter)
-    env["ANTHROPIC_API_KEY"] = api_key
+    # Ensure the subprocess has the OpenRouter key
     env["OPENROUTER_API_KEY"] = api_key
+
     # Pass the selected region to the agent
     env["AGENT_LOCATION"] = _selected_region
     # Pass the user ID so the tracker saves per-user files
@@ -3826,7 +3826,7 @@ async function showHackAnimation(email) {
             yield f"data: [SYSTEM] Starting agent with CV: {_uploaded_filename}\n\n"
             yield f"data: [SYSTEM] Analyzing resume, generating search keywords...\n\n"
 
-            api_key = _gui_api_key or config.anthropic_api_key
+            api_key = _gui_api_key or config.openrouter_api_key
             thread = threading.Thread(
                 target=_run_agent_in_thread,
                 args=(work_dir, api_key, current_user_id),
@@ -4025,7 +4025,7 @@ async function showHackAnimation(email) {
         s = _agent_status()
         uid = get_user_id()
         user = get_current_user()
-        s['api_key_configured'] = bool(_gui_api_key or config.anthropic_api_key)
+        s['api_key_configured'] = bool(_gui_api_key or config.openrouter_api_key)
         s['uploaded_filename'] = _uploaded_filename
         s['selected_region'] = _selected_region
         s['user'] = {
@@ -4762,13 +4762,13 @@ def run_dashboard(config: AppConfig):
     url = f"http://{host}:{port}"
 
     print(f"\n  [NET] Job Agent GUI starting at {url}")
-    if not config.anthropic_api_key:
-        print(f"  [WARN] ANTHROPIC_API_KEY is not set!")
+    if not config.openrouter_api_key:
+        print(f"  [WARN] OPENROUTER_API_KEY is not set!")
         print(f"  [WARN] Enter it in the browser GUI (API Key field below the header)")
-        print(f"  [WARN] Or restart with: set ANTHROPIC_API_KEY=sk-ant-... && python -m agent dashboard")
+        print(f"  [WARN] Or restart with: set OPENROUTER_API_KEY=sk-or-... && python -m agent dashboard")
         print()
     else:
-        print(f"  [OK] ANTHROPIC_API_KEY is configured")
+        print(f"  [OK] OPENROUTER_API_KEY is configured")
     print(f"  Upload your CV and click 'Run Agent' to start!\n")
 
     # Open browser automatically
