@@ -17,16 +17,59 @@ logger = logging.getLogger(__name__)
 class AIClient:
     """Client for Claude AI integration."""
     
+    # OpenRouter uses its own model IDs (e.g. anthropic/claude-sonnet-4)
+
     def __init__(self, config: AppConfig):
         self.config = config
         self.client = None
         self.feedback_insights = ""
         if config.anthropic_api_key:
             self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
-    
+        elif config.openrouter_api_key:
+            # Use OpenAI SDK for OpenRouter (Anthropic SDK has URL path mismatch)
+            from openai import OpenAI
+            self.openai_client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=config.openrouter_api_key,
+                default_headers={
+                    "HTTP-Referer": "https://github.com/job-agent",
+                    "X-Title": "Job Application Agent",
+                },
+            )
+            # Keep self.client as None so _call() routes to openai_client
+
+    def _call(self, prompt: str, max_tokens: int = 2000) -> str:
+        """Send a prompt to the AI and return the text response.
+        Routes to correct backend (Anthropic SDK or OpenRouter via OpenAI SDK)."""
+        if self.client:
+            response = self.client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.content[0].text.strip()
+        elif hasattr(self, 'openai_client') and self.openai_client:
+            response = self.openai_client.chat.completions.create(
+                model="anthropic/claude-sonnet-4",
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.choices[0].message.content.strip()
+        raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+
+    def _strip_fences(self, text: str) -> str:
+        """Strip markdown code fences from AI response."""
+        text = text.strip()
+        if text.startswith("```"):
+            parts = text.split("```")
+            text = parts[1] if len(parts) > 1 else text
+            if text.startswith("json"):
+                text = text[4:].strip()
+        return text.strip()
+
     @property
     def is_available(self) -> bool:
-        return self.client is not None
+        return self.client is not None or (hasattr(self, 'openai_client') and self.openai_client is not None)
     
     def generate_cv(self, profile: Dict[str, Any], jobs: List[Dict[str, Any]], score_range: str, resume_text: str = "") -> str:
         """Generate a tailored CV for a group of jobs in a score range.
@@ -40,8 +83,8 @@ class AIClient:
         Returns:
             Generated CV as a formatted string
         """
-        if not self.client:
-            raise EnvironmentError("ANTHROPIC_API_KEY not set")
+        if not self.is_available:
+            raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
         
         skills_str = ', '.join(profile.get('skills', []))
         roles_str = ', '.join(profile.get('target_roles', []))
@@ -96,19 +139,9 @@ Generate a professional CV that:
 
 Return ONLY the CV text, properly formatted with clear sections. Do not include any meta-commentary."""
 
-        response = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        cv_text = response.content[0].text.strip()
-        # Strip markdown fences if present
-        if cv_text.startswith("```"):
-            parts = cv_text.split("```")
-            cv_text = parts[1] if len(parts) > 1 else cv_text
-        
-        return cv_text.strip()
+        cv_text = self._call(prompt, max_tokens=4000)
+        cv_text = self._strip_fences(cv_text)
+        return cv_text
     
     def analyze_resume_for_keywords(self, resume_text: str, current_roles: Optional[List[str]] = None) -> List[str]:
         """
@@ -121,8 +154,8 @@ Return ONLY the CV text, properly formatted with clear sections. Do not include 
         Returns:
             List of suggested target role titles to search for
         """
-        if not self.client:
-            raise EnvironmentError("ANTHROPIC_API_KEY not set")
+        if not self.is_available:
+            raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
         
         current_roles_str = ', '.join(current_roles) if current_roles else 'Not specified'
         
@@ -145,20 +178,8 @@ Return ONLY a JSON array of strings, like:
 ["Role 1", "Role 2", "Role 3"]
 Do not include any other text or explanation."""
 
-        response = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=500,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        text = response.content[0].text.strip()
-        
-        # Strip markdown fences if present
-        if text.startswith("```"):
-            parts = text.split("```")
-            text = parts[1] if len(parts) > 1 else text
-            if text.startswith("json"):
-                text = text[4:].strip()
+        text = self._call(prompt, max_tokens=500)
+        text = self._strip_fences(text)
         
         try:
             roles = json.loads(text.strip())
@@ -173,8 +194,8 @@ Do not include any other text or explanation."""
         """Score a job using only its title/company when no description is available.
         Uses a simpler prompt that scores based on title + skills alignment.
         """
-        if not self.client:
-            raise EnvironmentError("ANTHROPIC_API_KEY not set")
+        if not self.is_available:
+            raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
 
         skills_str = ', '.join(profile.get('skills', []))
         roles_str = ', '.join(profile.get('target_roles', []))
@@ -213,21 +234,10 @@ Respond in JSON only:
   "cover_letter": "Based on the job title, I believe my background in {skills_str} aligns well with this role. I would be excited to contribute my expertise to {job.company}."
 }}"""
 
-        response = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        text = self._call(prompt, max_tokens=1000)
+        text = self._strip_fences(text)
 
-        text = response.content[0].text.strip()
-
-        if text.startswith("```"):
-            parts = text.split("```")
-            text = parts[1] if len(parts) > 1 else text
-            if text.startswith("json"):
-                text = text[4:].strip()
-
-        data = json.loads(text.strip())
+        data = json.loads(text)
         return AIResult(
             match_score=data.get("match_score", 0),
             matching_skills=data.get("matching_skills", []),
@@ -241,8 +251,8 @@ Respond in JSON only:
         Returns a dict with name, email, phone, linkedin, address, skills,
         experience, education, and suggested target roles.
         """
-        if not self.client:
-            raise EnvironmentError("ANTHROPIC_API_KEY not set")
+        if not self.is_available:
+            raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
 
         prompt = f"""You are an expert resume parser. Extract a structured profile from the following resume/CV text.
 
@@ -275,27 +285,16 @@ Rules:
 - Do not include any text outside the JSON object
 """
 
-        response = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        text = self._call(prompt, max_tokens=1500)
+        text = self._strip_fences(text)
 
-        text = response.content[0].text.strip()
-
-        if text.startswith("```"):
-            parts = text.split("```")
-            text = parts[1] if len(parts) > 1 else text
-            if text.startswith("json"):
-                text = text[4:].strip()
-
-        data = json.loads(text.strip())
+        data = json.loads(text)
         return data
 
     def tailor_application(self, profile: Dict[str, Any], job: Job, resume_text: str = "") -> AIResult:
         """Use Claude to score job match and write tailored cover letter."""
-        if not self.client:
-            raise EnvironmentError("ANTHROPIC_API_KEY not set")
+        if not self.is_available:
+            raise EnvironmentError("No API key configured. Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
         
         skills_str = ', '.join(profile.get('skills', []))
         roles_str = ', '.join(profile.get('target_roles', []))
@@ -335,22 +334,10 @@ Respond in JSON only:
   "cover_letter": "..."
 }}"""
 
-        response = self.client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        text = response.content[0].text.strip()
-        
-        # Strip markdown fences if present
-        if text.startswith("```"):
-            parts = text.split("```")
-            text = parts[1] if len(parts) > 1 else text
-            if text.startswith("json"):
-                text = text[4:].strip()
-        
-        data = json.loads(text.strip())
+        text = self._call(prompt, max_tokens=1500)
+        text = self._strip_fences(text)
+
+        data = json.loads(text)
         return AIResult(
             match_score=data.get("match_score", 0),
             matching_skills=data.get("matching_skills", []),

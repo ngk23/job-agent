@@ -145,14 +145,15 @@ def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = N
     env = os.environ.copy()
     # Use the API key from the config (passed from the dashboard app)
     if not api_key:
-        api_key = env.get("ANTHROPIC_API_KEY", "")
+        api_key = env.get("ANTHROPIC_API_KEY", "") or env.get("OPENROUTER_API_KEY", "")
     if not api_key:
-        _output_queue.put("[ERROR] ANTHROPIC_API_KEY not set. Cannot run agent.\n")
-        _output_queue.put("[ERROR] Set the ANTHROPIC_API_KEY environment variable and restart the dashboard.\n")
+        _output_queue.put("[ERROR] No API key configured. Cannot run agent.\n")
+        _output_queue.put("[ERROR] Set ANTHROPIC_API_KEY or OPENROUTER_API_KEY in environment/secret.\n")
         _run_complete = True
         return
-    # Ensure the subprocess has the key
+    # Ensure the subprocess has the key (either Anthropic or OpenRouter)
     env["ANTHROPIC_API_KEY"] = api_key
+    env["OPENROUTER_API_KEY"] = api_key
     # Pass the selected region to the agent
     env["AGENT_LOCATION"] = _selected_region
     # Pass the user ID so the tracker saves per-user files
@@ -241,7 +242,7 @@ def create_dashboard_app(config: AppConfig):
 
     # Ensure session cookies work correctly on HF Spaces behind proxy
     app.config.update(
-        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_SECURE=config.is_hf_space,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax',
         SESSION_COOKIE_DOMAIN=None,
@@ -571,12 +572,13 @@ def create_dashboard_app(config: AppConfig):
   <div class="subtitle">Sign in to your account</div>
     {pending_msg}
   
-  <form action="/login" method="post">
+  <form action="/login" method="post" onsubmit="return handleLogin(event)">
     <label>Email</label>
-    <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
+    <input type="email" id="loginEmail" name="email" placeholder="you@example.com" required autocomplete="email">
     <label>Password</label>
-    <input type="password" name="password" placeholder="••••••••" required autocomplete="current-password">
+    <input type="password" id="loginPassword" name="password" placeholder="••••••••" required autocomplete="current-password">
     <button type="submit" class="auth-btn">SIGN IN</button>
+    <div class="auth-error" id="loginError"></div>
   </form>
   
   <div class="auth-link">
@@ -908,6 +910,7 @@ async function handleSignup(e) {
     });
     const data = await resp.json();
     if (data.status === 'ok') {
+      await showHackAnimation(email);
       window.location.href = '/';
     } else if (data.status === 'pending_approval') {
       // Show success: waiting for admin approval
@@ -933,6 +936,90 @@ async function handleSignup(e) {
   }
   return false;
 }
+
+// ── Hacking Animation ──
+function getHackLines(email) {
+  return [
+    { text: '[INIT] Establishing secure connection...', cls: 'info', delay: 100 },
+    { text: '[OK]  Handshake complete (TLS 1.3, 4096-bit RSA)', cls: 'success', delay: 200 },
+    { text: '[INIT] Registering new identity...', cls: 'info', delay: 150 },
+    { text: '[!]   Creating profile for: ' + email, cls: 'warning', delay: 250 },
+    { text: '[INIT] Generating cryptographic keys...', cls: 'info', delay: 120 },
+    { text: '[OK]  RSA-4096 keypair generated', cls: 'success', delay: 200 },
+    { text: '[INIT] Encrypting personal data vault...', cls: 'info', delay: 150 },
+    { text: '[OK]  AES-256-GCM encryption active', cls: 'success', delay: 250 },
+    { text: '[INIT] Registering with secure directory...', cls: 'info', delay: 180 },
+    { text: '[OK]  Identity verified and stored', cls: 'success', delay: 200 },
+    { text: '[INIT] Configuring access credentials...', cls: 'info', delay: 150 },
+    { text: '[OK]  Multi-factor authentication enabled', cls: 'success', delay: 250 },
+    { text: '[INIT] Masking network fingerprint...', cls: 'info', delay: 120 },
+    { text: '[OK]  Proxy chain: ACTIVE (14 hops)', cls: 'success', delay: 200 },
+    { text: '[INIT] Synchronizing with job network...', cls: 'info', delay: 150 },
+    { text: '[OK]  All systems operational', cls: 'success', delay: 180 },
+    { text: '[SYS] Identity established. Redirecting...', cls: 'highlight', delay: 300 },
+  ];
+}
+
+async function showHackAnimation(email) {
+  const overlay = document.getElementById('hackOverlay');
+  const output = document.getElementById('hackOutput');
+  const progressBar = document.getElementById('hackProgressBar');
+  const granted = document.getElementById('hackGranted');
+  
+  // Reset
+  overlay.classList.add('active');
+  output.innerHTML = '';
+  progressBar.style.width = '0%';
+  granted.classList.remove('active');
+  granted.style.display = 'none';
+  
+  // Start matrix rain on canvas
+  const canvas = document.getElementById('hackCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const cols = Math.floor(canvas.width / 14);
+  const drops = Array(cols).fill(1);
+  const chars = 'ABCDEF0123456789<>!@#$%^&*()_+-=[]{}|;:,./<>?~`';
+  
+  function drawMatrix() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#00ff41';
+    ctx.font = '14px monospace';
+    for (let i = 0; i < drops.length; i++) {
+      const char = chars[Math.floor(Math.random() * chars.length)];
+      ctx.fillText(char, i * 14, drops[i] * 14);
+      if (drops[i] * 14 > canvas.height && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+  }
+  const matrixInterval = setInterval(drawMatrix, 50);
+  
+  // Show lines with typing effect
+  const lines = getHackLines(email);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const div = document.createElement('div');
+    div.className = 'line ' + line.cls;
+    div.textContent = line.text;
+    output.appendChild(div);
+    output.scrollTop = output.scrollHeight;
+    const progress = Math.round(((i + 1) / lines.length) * 100);
+    progressBar.style.width = progress + '%';
+    await new Promise(r => setTimeout(r, line.delay));
+  }
+  
+  // Flash ACCESS GRANTED
+  granted.style.display = 'block';
+  granted.classList.add('active');
+  
+  // Wait a moment then clean up
+  await new Promise(r => setTimeout(r, 800));
+  clearInterval(matrixInterval);
+  overlay.classList.remove('active');
+}
+
 </script>
 <!-- Hacking Animation Overlay -->
 <div class="hack-overlay" id="hackOverlay">
@@ -1219,27 +1306,7 @@ async function handleSignup(e) {
     letter-spacing: 1px;
     white-space: nowrap;
   }
-  .api-key-input {
-    flex: 1;
-    min-width: 200px;
-    padding: 10px 14px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--primary);
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.85em;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  .api-key-input:focus {
-    border-color: var(--primary);
-    box-shadow: 0 0 10px rgba(0,255,65,0.15);
-  }
-  .api-key-input::placeholder {
-    color: var(--text-dim);
-    opacity: 0.5;
-  }
+
   .api-key-status {
     font-size: 0.8em;
     white-space: nowrap;
@@ -1900,11 +1967,7 @@ async function handleSignup(e) {
   <!-- API Key Section -->
   <div class="api-key-section" id="apiKeySection">
     <label>🔑 API Key:</label>
-    <input type="password" class="api-key-input" id="apiKeyInput"
-      placeholder="sk-ant-... paste your Anthropic API key here"
-      autocomplete="off" spellcheck="false">
-    <button class="api-key-btn" id="apiKeyBtn" onclick="setApiKey()">SAVE</button>
-    <span class="api-key-status missing" id="apiKeyStatus">⚠️ Not set</span>
+    <span style="color:var(--primary);font-size:0.85em;">✅ Configured in environment</span>
   </div>
 
   <!-- Upload Section -->
@@ -2118,41 +2181,6 @@ function drawMatrix() {
 setInterval(drawMatrix, 50);
 
 // ── API Key ──
-const apiKeyInput = document.getElementById('apiKeyInput');
-const apiKeyStatus = document.getElementById('apiKeyStatus');
-
-async function setApiKey() {
-  const key = apiKeyInput.value.trim();
-  if (!key || !key.startsWith('sk-ant-')) {
-    apiKeyStatus.textContent = '⚠️ Invalid key (must start with sk-ant-)';
-    apiKeyStatus.className = 'api-key-status missing';
-    return;
-  }
-  try {
-    const resp = await fetch('/set-api-key', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: key })
-    });
-    const data = await resp.json();
-    if (data.status === 'ok') {
-      apiKeyStatus.textContent = '✅ Configured';
-      apiKeyStatus.className = 'api-key-status configured';
-      apiKeyInput.type = 'password';
-      apiKeyInput.disabled = true;
-      document.getElementById('apiKeyBtn').disabled = true;
-      // Enable run button if CV is also uploaded
-      if (uploadedFile) runBtn.disabled = false;
-    } else {
-      apiKeyStatus.textContent = '⚠️ ' + (data.error || 'Failed');
-      apiKeyStatus.className = 'api-key-status missing';
-    }
-  } catch (err) {
-    apiKeyStatus.textContent = '⚠️ Error: ' + err.message;
-    apiKeyStatus.className = 'api-key-status missing';
-  }
-}
-
 // ── Region Selector ──
 const regionSelect = document.getElementById('regionSelect');
 const regionStatus = document.getElementById('regionStatus');
@@ -2174,15 +2202,8 @@ async function setRegion(value) {
   }
 }
 
-// Check on page load if API key is already set (don't pre-load uploaded CV)
+// Restore previously selected region on page load
 fetch('/status').then(r => r.json()).then(status => {
-  if (status.api_key_configured) {
-    apiKeyStatus.textContent = '✅ Configured';
-    apiKeyStatus.className = 'api-key-status configured';
-    apiKeyInput.disabled = true;
-    document.getElementById('apiKeyBtn').disabled = true;
-  }
-  // Restore previously selected region
   if (status.selected_region) {
     const options = regionSelect.querySelectorAll('option');
     for (const opt of options) {
@@ -2240,7 +2261,7 @@ async function handleFile(file) {
     const data = await resp.json();
     if (data.status === 'ok') {
       // Only enable Run button if API key is also configured
-      runBtn.disabled = !apiKeyInput.disabled;
+      runBtn.disabled = false;
     } else {
       alert('Upload failed: ' + (data.error || 'Unknown error'));
     }
@@ -2983,6 +3004,89 @@ async function handleChangePw(e) {
   }
   btn.disabled = false;
   btn.textContent = 'CHANGE PASSWORD';
+
+// ── Hacking Animation ──
+function getHackLines(email) {
+  return [
+    { text: '[INIT] Establishing secure connection...', cls: 'info', delay: 100 },
+    { text: '[OK]  Handshake complete (TLS 1.3, 4096-bit RSA)', cls: 'success', delay: 200 },
+    { text: '[INIT] Registering new identity...', cls: 'info', delay: 150 },
+    { text: '[!]   Creating profile for: ' + email, cls: 'warning', delay: 250 },
+    { text: '[INIT] Generating cryptographic keys...', cls: 'info', delay: 120 },
+    { text: '[OK]  RSA-4096 keypair generated', cls: 'success', delay: 200 },
+    { text: '[INIT] Encrypting personal data vault...', cls: 'info', delay: 150 },
+    { text: '[OK]  AES-256-GCM encryption active', cls: 'success', delay: 250 },
+    { text: '[INIT] Registering with secure directory...', cls: 'info', delay: 180 },
+    { text: '[OK]  Identity verified and stored', cls: 'success', delay: 200 },
+    { text: '[INIT] Configuring access credentials...', cls: 'info', delay: 150 },
+    { text: '[OK]  Multi-factor authentication enabled', cls: 'success', delay: 250 },
+    { text: '[INIT] Masking network fingerprint...', cls: 'info', delay: 120 },
+    { text: '[OK]  Proxy chain: ACTIVE (14 hops)', cls: 'success', delay: 200 },
+    { text: '[INIT] Synchronizing with job network...', cls: 'info', delay: 150 },
+    { text: '[OK]  All systems operational', cls: 'success', delay: 180 },
+    { text: '[SYS] Identity established. Redirecting...', cls: 'highlight', delay: 300 },
+  ];
+}
+
+async function showHackAnimation(email) {
+  const overlay = document.getElementById('hackOverlay');
+  const output = document.getElementById('hackOutput');
+  const progressBar = document.getElementById('hackProgressBar');
+  const granted = document.getElementById('hackGranted');
+  
+  // Reset
+  overlay.classList.add('active');
+  output.innerHTML = '';
+  progressBar.style.width = '0%';
+  granted.classList.remove('active');
+  granted.style.display = 'none';
+  
+  // Start matrix rain on canvas
+  const canvas = document.getElementById('hackCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const cols = Math.floor(canvas.width / 14);
+  const drops = Array(cols).fill(1);
+  const chars = 'ABCDEF0123456789<>!@#$%^&*()_+-=[]{}|;:,./<>?~`';
+  
+  function drawMatrix() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#00ff41';
+    ctx.font = '14px monospace';
+    for (let i = 0; i < drops.length; i++) {
+      const char = chars[Math.floor(Math.random() * chars.length)];
+      ctx.fillText(char, i * 14, drops[i] * 14);
+      if (drops[i] * 14 > canvas.height && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+  }
+  const matrixInterval = setInterval(drawMatrix, 50);
+  
+  // Show lines with typing effect
+  const lines = getHackLines(email);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const div = document.createElement('div');
+    div.className = 'line ' + line.cls;
+    div.textContent = line.text;
+    output.appendChild(div);
+    output.scrollTop = output.scrollHeight;
+    const progress = Math.round(((i + 1) / lines.length) * 100);
+    progressBar.style.width = progress + '%';
+    await new Promise(r => setTimeout(r, line.delay));
+  }
+  
+  // Flash ACCESS GRANTED
+  granted.style.display = 'block';
+  granted.classList.add('active');
+  
+  // Wait a moment then clean up
+  await new Promise(r => setTimeout(r, 800));
+  clearInterval(matrixInterval);
+  overlay.classList.remove('active');
+}
   return false;
 }
 </script>
@@ -3288,6 +3392,89 @@ async function handleForgot(e) {
   }
   btn.disabled = false;
   btn.textContent = 'SEND RESET LINK';
+
+// ── Hacking Animation ──
+function getHackLines(email) {
+  return [
+    { text: '[INIT] Establishing secure connection...', cls: 'info', delay: 100 },
+    { text: '[OK]  Handshake complete (TLS 1.3, 4096-bit RSA)', cls: 'success', delay: 200 },
+    { text: '[INIT] Registering new identity...', cls: 'info', delay: 150 },
+    { text: '[!]   Creating profile for: ' + email, cls: 'warning', delay: 250 },
+    { text: '[INIT] Generating cryptographic keys...', cls: 'info', delay: 120 },
+    { text: '[OK]  RSA-4096 keypair generated', cls: 'success', delay: 200 },
+    { text: '[INIT] Encrypting personal data vault...', cls: 'info', delay: 150 },
+    { text: '[OK]  AES-256-GCM encryption active', cls: 'success', delay: 250 },
+    { text: '[INIT] Registering with secure directory...', cls: 'info', delay: 180 },
+    { text: '[OK]  Identity verified and stored', cls: 'success', delay: 200 },
+    { text: '[INIT] Configuring access credentials...', cls: 'info', delay: 150 },
+    { text: '[OK]  Multi-factor authentication enabled', cls: 'success', delay: 250 },
+    { text: '[INIT] Masking network fingerprint...', cls: 'info', delay: 120 },
+    { text: '[OK]  Proxy chain: ACTIVE (14 hops)', cls: 'success', delay: 200 },
+    { text: '[INIT] Synchronizing with job network...', cls: 'info', delay: 150 },
+    { text: '[OK]  All systems operational', cls: 'success', delay: 180 },
+    { text: '[SYS] Identity established. Redirecting...', cls: 'highlight', delay: 300 },
+  ];
+}
+
+async function showHackAnimation(email) {
+  const overlay = document.getElementById('hackOverlay');
+  const output = document.getElementById('hackOutput');
+  const progressBar = document.getElementById('hackProgressBar');
+  const granted = document.getElementById('hackGranted');
+  
+  // Reset
+  overlay.classList.add('active');
+  output.innerHTML = '';
+  progressBar.style.width = '0%';
+  granted.classList.remove('active');
+  granted.style.display = 'none';
+  
+  // Start matrix rain on canvas
+  const canvas = document.getElementById('hackCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const cols = Math.floor(canvas.width / 14);
+  const drops = Array(cols).fill(1);
+  const chars = 'ABCDEF0123456789<>!@#$%^&*()_+-=[]{}|;:,./<>?~`';
+  
+  function drawMatrix() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#00ff41';
+    ctx.font = '14px monospace';
+    for (let i = 0; i < drops.length; i++) {
+      const char = chars[Math.floor(Math.random() * chars.length)];
+      ctx.fillText(char, i * 14, drops[i] * 14);
+      if (drops[i] * 14 > canvas.height && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+  }
+  const matrixInterval = setInterval(drawMatrix, 50);
+  
+  // Show lines with typing effect
+  const lines = getHackLines(email);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const div = document.createElement('div');
+    div.className = 'line ' + line.cls;
+    div.textContent = line.text;
+    output.appendChild(div);
+    output.scrollTop = output.scrollHeight;
+    const progress = Math.round(((i + 1) / lines.length) * 100);
+    progressBar.style.width = progress + '%';
+    await new Promise(r => setTimeout(r, line.delay));
+  }
+  
+  // Flash ACCESS GRANTED
+  granted.style.display = 'block';
+  granted.classList.add('active');
+  
+  // Wait a moment then clean up
+  await new Promise(r => setTimeout(r, 800));
+  clearInterval(matrixInterval);
+  overlay.classList.remove('active');
+}
   return false;
 }
 </script>
@@ -3397,6 +3584,89 @@ async function handleReset(e) {
   }
   btn.disabled = false;
   btn.textContent = 'UPDATE PASSWORD';
+
+// ── Hacking Animation ──
+function getHackLines(email) {
+  return [
+    { text: '[INIT] Establishing secure connection...', cls: 'info', delay: 100 },
+    { text: '[OK]  Handshake complete (TLS 1.3, 4096-bit RSA)', cls: 'success', delay: 200 },
+    { text: '[INIT] Registering new identity...', cls: 'info', delay: 150 },
+    { text: '[!]   Creating profile for: ' + email, cls: 'warning', delay: 250 },
+    { text: '[INIT] Generating cryptographic keys...', cls: 'info', delay: 120 },
+    { text: '[OK]  RSA-4096 keypair generated', cls: 'success', delay: 200 },
+    { text: '[INIT] Encrypting personal data vault...', cls: 'info', delay: 150 },
+    { text: '[OK]  AES-256-GCM encryption active', cls: 'success', delay: 250 },
+    { text: '[INIT] Registering with secure directory...', cls: 'info', delay: 180 },
+    { text: '[OK]  Identity verified and stored', cls: 'success', delay: 200 },
+    { text: '[INIT] Configuring access credentials...', cls: 'info', delay: 150 },
+    { text: '[OK]  Multi-factor authentication enabled', cls: 'success', delay: 250 },
+    { text: '[INIT] Masking network fingerprint...', cls: 'info', delay: 120 },
+    { text: '[OK]  Proxy chain: ACTIVE (14 hops)', cls: 'success', delay: 200 },
+    { text: '[INIT] Synchronizing with job network...', cls: 'info', delay: 150 },
+    { text: '[OK]  All systems operational', cls: 'success', delay: 180 },
+    { text: '[SYS] Identity established. Redirecting...', cls: 'highlight', delay: 300 },
+  ];
+}
+
+async function showHackAnimation(email) {
+  const overlay = document.getElementById('hackOverlay');
+  const output = document.getElementById('hackOutput');
+  const progressBar = document.getElementById('hackProgressBar');
+  const granted = document.getElementById('hackGranted');
+  
+  // Reset
+  overlay.classList.add('active');
+  output.innerHTML = '';
+  progressBar.style.width = '0%';
+  granted.classList.remove('active');
+  granted.style.display = 'none';
+  
+  // Start matrix rain on canvas
+  const canvas = document.getElementById('hackCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const cols = Math.floor(canvas.width / 14);
+  const drops = Array(cols).fill(1);
+  const chars = 'ABCDEF0123456789<>!@#$%^&*()_+-=[]{}|;:,./<>?~`';
+  
+  function drawMatrix() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#00ff41';
+    ctx.font = '14px monospace';
+    for (let i = 0; i < drops.length; i++) {
+      const char = chars[Math.floor(Math.random() * chars.length)];
+      ctx.fillText(char, i * 14, drops[i] * 14);
+      if (drops[i] * 14 > canvas.height && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+  }
+  const matrixInterval = setInterval(drawMatrix, 50);
+  
+  // Show lines with typing effect
+  const lines = getHackLines(email);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const div = document.createElement('div');
+    div.className = 'line ' + line.cls;
+    div.textContent = line.text;
+    output.appendChild(div);
+    output.scrollTop = output.scrollHeight;
+    const progress = Math.round(((i + 1) / lines.length) * 100);
+    progressBar.style.width = progress + '%';
+    await new Promise(r => setTimeout(r, line.delay));
+  }
+  
+  // Flash ACCESS GRANTED
+  granted.style.display = 'block';
+  granted.classList.add('active');
+  
+  // Wait a moment then clean up
+  await new Promise(r => setTimeout(r, 800));
+  clearInterval(matrixInterval);
+  overlay.classList.remove('active');
+}
   return false;
 }
 </script>

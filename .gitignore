@@ -128,3 +128,11 @@ resume.txt
 # OS files
 .DS_Store
 Thumbs.db
+
+# Windows reserved names
+nul
+NUL
+Nul
+
+# Temp/artifact files
+=1.3.0

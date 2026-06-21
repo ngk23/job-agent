@@ -16,6 +16,7 @@ from .ai import AIClient
 from .tracker import ApplicationTracker
 from .dashboard import run_dashboard
 from .feedback_learning import get_feedback_insights_for_prompt
+from .form_filler import JobApplicationAgent, map_profile_to_form_filler
 from .models import Job, Platform, AIResult
 from .word_exporter import export_jobs_to_word, export_scored_jobs_to_word, ScoredJob
 
@@ -142,7 +143,7 @@ async def run_search(profile: dict, context, limit: int = 0):
     return unique_jobs
 
 
-# ─── Main agent (search → score → CV → export) ────────────────────────────────
+# ─── Main agent (search → score → CV → export) ──────────────────────────────
 
 async def run_agent(config: AppConfig):
     """Main job search, scoring, CV generation, and export orchestrator."""
@@ -160,7 +161,7 @@ async def run_agent(config: AppConfig):
     resume_text = resume_handler.get_for_cover_letter() if resume_handler else ""
 
     ai_client = AIClient(config)
-    
+
     # Load feedback learning insights for self-improvement
     try:
         feedback_insights = get_feedback_insights_for_prompt(days=30)
@@ -172,7 +173,7 @@ async def run_agent(config: AppConfig):
     except Exception as e:
         logger.warning(f"Could not load feedback insights: {e}")
         ai_client.feedback_insights = ""
-    
+
     tracker = ApplicationTracker(data_dir=config.data_dir)
 
     print(f"\n{'='*60}")
@@ -183,9 +184,7 @@ async def run_agent(config: AppConfig):
 
     # ── Wipe old data from previous runs ──
     if resume_handler.resume_path and resume_handler.resume_path.exists():
-        # Clear old tracker history so results are fresh for this CV
         tracker.clear()
-        # Clean up old output files from previous runs
         for old_file in Path(".").glob("jobs_*.docx"):
             old_file.unlink(missing_ok=True)
         for old_file in Path(".").glob("cv_*.pdf"):
@@ -198,7 +197,6 @@ async def run_agent(config: AppConfig):
         try:
             extracted = ai_client.extract_full_profile(resume_text)
             if extracted and extracted.get('name'):
-                # Merge extracted fields into the working profile
                 for field in ['name', 'email', 'phone', 'linkedin_url', 'github_url',
                              'address', 'current_title', 'current_company',
                              'experience_summary', 'skills', 'education', 'bachelor',
@@ -210,10 +208,8 @@ async def run_agent(config: AppConfig):
                 print(f"  [AI] Skills: {len(extracted.get('skills', []))} skills found")
                 print(f"  [AI] Target roles: {', '.join(extracted.get('target_roles', profile.get('target_roles', [])))}")
 
-                # Save the full extracted profile to profile.json
                 profile_path = Path(config.profile_path)
                 if profile_path.exists():
-                    # Load existing profile, update with extracted fields
                     with open(profile_path) as f:
                         full_profile = json.load(f)
                     for field in ['name', 'email', 'phone', 'linkedin_url', 'github_url',
@@ -222,14 +218,12 @@ async def run_agent(config: AppConfig):
                                  'target_roles']:
                         if extracted.get(field):
                             full_profile[field] = extracted[field]
-                    # Also set resume_path for future runs
                     if config.resume_path:
                         full_profile['resume_path'] = config.resume_path
                     with open(profile_path, 'w') as f:
                         json.dump(full_profile, f, indent=2)
                     print(f"  [AI] Profile saved to {config.profile_path}")
             else:
-                # Fallback: just try to get keywords
                 suggested_roles = ai_client.analyze_resume_for_keywords(
                     resume_text, profile.get('target_roles', [])
                 )
@@ -312,7 +306,6 @@ async def run_agent(config: AppConfig):
                 await page_pool.put(page)
 
             if not job.description:
-                # Try title-only scoring if the job is AI/ML related
                 profile_keywords = profile.get('ai_keywords', [])
                 if _is_ai_related(job.title, profile_keywords):
                     async with ai_semaphore:
@@ -330,8 +323,7 @@ async def run_agent(config: AppConfig):
                             return
                         except Exception as e:
                             logger.error(f"Title-only AI error for {job.title}: {e}")
-                            # Fall through to SKIP below
-                
+
                 async with lock:
                     completed_count += 1
                     sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} SKIP: {job.title[:40]} - no description      \n")
@@ -401,7 +393,6 @@ async def run_agent(config: AppConfig):
 
         for idx, range_label in enumerate(cv_to_generate):
             jobs_in_range = ranges_with_jobs[range_label]
-            # Progress bar for CV generation
             sys.stdout.write(_progress_bar(idx, len(cv_to_generate), label="Generating CVs"))
             sys.stdout.write(f"\r  Generating CV for {range_label}% ({len(jobs_in_range)} jobs)...")
             sys.stdout.flush()
@@ -417,7 +408,6 @@ async def run_agent(config: AppConfig):
             except Exception as e:
                 print(f"\r  [X] CV for {range_label}% - failed: {e}                    ")
 
-        # Final CV progress bar
         sys.stdout.write(_progress_bar(len(cv_to_generate), len(cv_to_generate), label="CVs complete"))
         sys.stdout.write("\n")
         sys.stdout.flush()
@@ -437,7 +427,6 @@ async def run_agent(config: AppConfig):
             if word_path and os.path.isfile(word_path):
                 created_files.append(word_path)
 
-        # Open all created Word files
         if created_files:
             print(f"\n  Opening {len(created_files)} Word file(s)...")
             for f in created_files:
@@ -463,7 +452,7 @@ async def run_agent(config: AppConfig):
     return 0
 
 
-# ─── Export (no scoring) ───────────────────────────────────────────────────────
+# ─── Export (no scoring) ─────────────────────────────────────────────────────
 
 async def export_jobs_only(config: AppConfig):
     """Export job listings to Word without opening job pages or scoring."""
@@ -519,6 +508,34 @@ async def export_jobs_only(config: AppConfig):
     filepath = export_jobs_to_word(all_jobs, profile.get('name', ''), output_path)
 
     print(f"\n  [OK] Exported {len(all_jobs)} jobs to: {filepath}\n")
+    return 0
+
+
+# ─── Form auto-fill ──────────────────────────────────────────────────────────
+
+async def run_apply(config: AppConfig, job_url: str):
+    """Auto-fill a job application form using OpenRouter + Playwright."""
+    if not config.openrouter_api_key:
+        print("[ERROR] OPENROUTER_API_KEY not set. Please set it before running:")
+        print('   export OPENROUTER_API_KEY="sk-or-..."')
+        print("Get a free key at https://openrouter.ai")
+        return 1
+
+    try:
+        profile = load_profile(config.profile_path)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"ERROR: {e}")
+        return 1
+
+    form_profile = map_profile_to_form_filler(profile)
+    agent = JobApplicationAgent(config.openrouter_api_key, form_profile)
+    result = await agent.apply_to_job(job_url, headless=config.headless)
+
+    if "error" in result:
+        print(f"\n  [ERROR] {result['error']}")
+        return 1
+
+    print(f"\n  Auto-fill complete. Success: {result.get('success_count', 0)}, Paused: {result.get('pause_count', 1)}")
     return 0
 
 
@@ -578,6 +595,12 @@ def main():
     export_parser.add_argument("--output", default="job_listings.docx", help="Output Word file path")
     export_parser.add_argument("--max-jobs", type=int, default=0, help="Max jobs to search per platform (0 = unlimited)")
 
+    # Apply command (auto-fill job application form)
+    apply_parser = subparsers.add_parser("apply", help="Auto-fill a job application form using OpenRouter")
+    apply_parser.add_argument("url", help="Job application URL to auto-fill")
+    apply_parser.add_argument("--profile", default="profiles/profile.json", help="Path to profile JSON")
+    apply_parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
+
     # Dashboard
     dash_parser = subparsers.add_parser("dashboard", help="Start the web dashboard")
     dash_parser.add_argument("--port", type=int, default=8080, help="Dashboard port")
@@ -598,9 +621,11 @@ def main():
         config.word_export_path = args.output
         if args.resume:
             config.resume_path = args.resume
+    elif args.command == "apply":
+        config.profile_path = args.profile
+        config.headless = args.headless
     elif args.command == "dashboard":
         # On HF Spaces, host/port are auto-detected (0.0.0.0:7860)
-        # Only apply argparse overrides when running locally
         if not config.is_hf_space:
             config.dashboard_port = args.port
             config.dashboard_host = args.host
@@ -610,6 +635,7 @@ def main():
         print("\n  Quick start:")
         print("    python -m agent run              # Search, score, generate CVs, export")
         print("    python -m agent export            # Export job list to Word (no scoring)")
+        print("    python -m agent apply <URL>       # Auto-fill a job application form")
         print("    python -m agent dashboard         # Start dashboard")
         print("    python -m agent stats             # Show statistics\n")
         return 0
@@ -624,6 +650,8 @@ def main():
         config.word_export_path = args.output
         config.max_job_search = args.max_jobs
         return asyncio.run(export_jobs_only(config))
+    elif args.command == "apply":
+        return asyncio.run(run_apply(config, args.url))
     elif args.command == "dashboard":
         run_dashboard_cmd(config)
         return 0

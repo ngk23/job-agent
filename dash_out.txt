@@ -1,0 +1,25 @@
+
+  [NET] Job Agent GUI starting at http://127.0.0.1:8080
+  [WARN] ANTHROPIC_API_KEY is not set!
+  [WARN] Enter it in the browser GUI (API Key field below the header)
+  [WARN] Or restart with: set ANTHROPIC_API_KEY=sk-ant-... && python -m agent dashboard
+
+  Upload your CV and click 'Run Agent' to start!
+
+ * Serving Flask app 'agent.dashboard'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:8080
+Press CTRL+C to quit
+127.0.0.1 - - [19/Jun/2026 18:06:31] "GET /login HTTP/1.1" 200 -
+127.0.0.1 - - [19/Jun/2026 18:06:33] "GET / HTTP/1.1" 302 -
+127.0.0.1 - - [19/Jun/2026 18:06:33] "GET /login HTTP/1.1" 200 -
+127.0.0.1 - - [19/Jun/2026 18:06:51] "GET /login HTTP/1.1" 200 -
+127.0.0.1 - - [19/Jun/2026 18:07:06] "POST /login HTTP/1.1" 200 -
+127.0.0.1 - - [19/Jun/2026 18:07:10] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [19/Jun/2026 18:07:10] "GET /status HTTP/1.1" 200 -
+127.0.0.1 - - [19/Jun/2026 18:10:08] "GET /login/google HTTP/1.1" 501 -
+127.0.0.1 - - [19/Jun/2026 18:10:49] "GET /login HTTP/1.1" 200 -
+127.0.0.1 - - [19/Jun/2026 18:10:50] "GET /login/google HTTP/1.1" 501 -
+127.0.0.1 - - [19/Jun/2026 18:12:42] "GET /login/google HTTP/1.1" 501 -
+127.0.0.1 - - [21/Jun/2026 17:48:51] "GET /login/google HTTP/1.1" 501 -

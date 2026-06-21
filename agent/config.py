@@ -25,10 +25,11 @@ def validate_config(config: "AppConfig") -> bool:
 
 def validate_config_run(config: "AppConfig") -> bool:
     """Validate configuration specifically for the 'run' command (requires API key)."""
-    if not config.anthropic_api_key:
-        print("[ERROR] ANTHROPIC_API_KEY not set. Please set it before running:")
-        print('   export ANTHROPIC_API_KEY="sk-ant-..."')
-        print("Get your key at https://console.anthropic.com")
+    if not config.anthropic_api_key and not config.openrouter_api_key:
+        print("[ERROR] No API key found. Set one of:")
+        print('   ANTHROPIC_API_KEY="sk-ant-..."  (direct Anthropic)')
+        print('   OPENROUTER_API_KEY="sk-or-..."   (via OpenRouter, free tier available)')
+        print("Get an OpenRouter key at https://openrouter.ai")
         return False
     return True
 
@@ -36,41 +37,43 @@ def validate_config_run(config: "AppConfig") -> bool:
 @dataclass
 class AppConfig:
     """Main application configuration."""
-    
+
     # API Keys
+    openrouter_api_key: str = ""
     anthropic_api_key: str = ""
-    
+
     # Profile
     profile_path: str = "profiles/profile.json"
-    
+
     # Browser
     headless: bool = False
     save_session: bool = True
-    
+
     # Search & scoring settings
     min_score: int = 70
     resume_path: Optional[str] = None
-    
+
     # Rate limiting
     rate_limit_base_delay: float = 3.0
     rate_limit_max_delay: float = 60.0
-    
+
     # Dashboard
     dashboard_port: int = 8080
-    dashboard_host: str = "127.0.0.1"
-    
+    dashboard_host: str = "127.1.1.1"
+
     # Data directory for persistent storage (HF Spaces uses /data)
     data_dir: str = "."
-    
+
     # Keyword generation from resume (always-on: auto-generates search keywords from resume)
     auto_keywords: bool = True
-    
+
     # Word export settings
     word_export_path: str = "job_listings.docx"
     max_job_search: int = 0  # max jobs to search per platform (0 = unlimited)
 
     def __post_init__(self):
         """Load config from environment variables."""
+        self.openrouter_api_key = get_env("OPENROUTER_API_KEY", self.openrouter_api_key)
         self.anthropic_api_key = get_env("ANTHROPIC_API_KEY", self.anthropic_api_key)
         self.profile_path = get_env("PROFILE_PATH", self.profile_path)
         self.resume_path = get_env("RESUME_PATH", self.resume_path) or self.resume_path
@@ -96,41 +99,41 @@ class AppConfig:
     def logs_dir(self) -> str:
         """Get the logs directory path."""
         return os.path.join(self.data_dir, "logs")
-    
+
     @property
     def sessions_dir(self) -> str:
         """Get the browser sessions directory path."""
         return os.path.join(self.data_dir, "logs", "sessions")
-    
+
     @property
     def profiles_dir(self) -> str:
         """Get the profiles directory path."""
         return os.path.join(self.data_dir, "profiles")
-    
+
     @property
     def applications_path(self) -> str:
         """Get the applications log file path."""
         return os.path.join(self.data_dir, "logs", "applications.json")
-    
+
     @property
     def applied_path(self) -> str:
         """Get the applied jobs file path."""
         return os.path.join(self.data_dir, "logs", "applied.json")
-    
+
     @property
     def resume_save_path(self) -> str:
         """Get the resume save path."""
         return os.path.join(self.data_dir, "resume.pdf")
-    
+
     @property
     def is_hf_space(self) -> bool:
         """Check if running on Hugging Face Spaces."""
         return bool(get_env("SPACE_ID") or get_env("HF_SPACE", "").lower() == "true")
-    
+
     @property
     def is_valid(self) -> bool:
         """Check if configuration is valid for running."""
-        return bool(self.anthropic_api_key)
+        return bool(self.anthropic_api_key or self.openrouter_api_key)
 
 
 def load_profile(path: str = "profiles/profile.json") -> Dict[str, Any]:
@@ -138,19 +141,16 @@ def load_profile(path: str = "profiles/profile.json") -> Dict[str, Any]:
     profile_path = Path(path)
     if not profile_path.exists():
         raise FileNotFoundError(f"Profile not found at {path}. Please create profiles/profile.json")
-    
+
     with open(profile_path) as f:
         profile = json.load(f)
-    
-    # Validate required fields — if name is empty, the profile is a template
-    # and will be auto-filled by AI extraction from the CV
+
+    # Validate required fields
     required = ["name", "email", "skills", "target_roles"]
     missing = [f for f in required if f not in profile]
     if missing:
         raise ValueError(f"Profile missing required fields: {', '.join(missing)}")
-    # If all fields exist but name is empty, it's a fresh template — that's OK
-    # Auto-extraction from the CV will fill it in during run_agent()
-    
+
     # Override from environment variables if set
     if get_env("USER_EMAIL"):
         logger.info("Overriding email from USER_EMAIL env var")
@@ -158,7 +158,7 @@ def load_profile(path: str = "profiles/profile.json") -> Dict[str, Any]:
     if get_env("USER_PHONE"):
         logger.info("Overriding phone from USER_PHONE env var")
         profile["phone"] = get_env("USER_PHONE")
-    
+
     return profile
 
 
