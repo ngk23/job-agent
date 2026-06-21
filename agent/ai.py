@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class AIClient:
     """Client for AI integration via OpenRouter (free models)."""
     
-    # OpenRouter free model (Google Gemini 2.0 Flash - fast, free, great for structured output)
+    # OpenRouter free model (Meta Llama 3.3 70B - reliable, good for CV writing & JSON)
 
     def __init__(self, config: AppConfig):
         self.config = config
@@ -38,7 +38,7 @@ class AIClient:
         Uses OpenRouter via the OpenAI SDK."""
         if self.openai_client:
             response = self.openai_client.chat.completions.create(
-                model="google/gemini-2.0-flash-exp:free",
+                model="meta-llama/llama-3.3-70b-instruct:free",
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
