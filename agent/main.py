@@ -373,11 +373,17 @@ async def run_agent(config: AppConfig):
             pool_pages.append(p)
             await page_pool.put(p)
 
-        # Semaphore to limit concurrent AI API calls
-        ai_semaphore = asyncio.Semaphore(5)
+        # Semaphore to limit concurrent AI API calls (reduced for free tier rate limits)
+        # OpenRouter free Llama 3.3 70B: ~8 req/min limit. We use semaphore=2 + staggered starts to stay under.
+        ai_semaphore = asyncio.Semaphore(2)
 
-        async def score_one_job(job: Job):
+        async def score_one_job(job: Job, index: int = 0):
             nonlocal high_match_count, completed_count
+
+            # Stagger the start of each job to spread out AI requests over time
+            # Each job waits an extra 1.5s * its index before starting, so requests
+            # are naturally spaced out and don't all hit the API at once.
+            await asyncio.sleep(index * 1.5)
 
             # Step 1: Fetch description (uses a page from the pool)
             page = await page_pool.get()
@@ -392,6 +398,8 @@ async def run_agent(config: AppConfig):
                 profile_keywords = profile.get('ai_keywords', [])
                 if _is_ai_related(job.title, profile_keywords):
                     async with ai_semaphore:
+                        # Extra delay before the AI call to respect rate limits
+                        await asyncio.sleep(2.0)
                         try:
                             ai_result = await asyncio.to_thread(
                                 ai_client.score_by_title_only, profile, job, resume_text
@@ -416,6 +424,8 @@ async def run_agent(config: AppConfig):
 
             # Step 2: AI scoring (rate-limited by semaphore, run in thread to not block event loop)
             async with ai_semaphore:
+                # Extra delay before the AI call to respect rate limits
+                await asyncio.sleep(2.0)
                 try:
                     ai_result = await asyncio.to_thread(
                         ai_client.tailor_application, profile, job, resume_text
@@ -442,8 +452,8 @@ async def run_agent(config: AppConfig):
                     sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [  ] {job.title[:35]:35s} -> {score}/100\n")
                 sys.stdout.flush()
 
-        # Process all jobs concurrently
-        tasks = [score_one_job(job) for job in all_jobs]
+        # Process all jobs concurrently with staggered starts
+        tasks = [score_one_job(job, i) for i, job in enumerate(all_jobs)]
         await asyncio.gather(*tasks)
 
         # Cleanup page pool

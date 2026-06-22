@@ -5,7 +5,10 @@ Uses OpenRouter (via OpenAI SDK) for all AI operations.
 
 import json
 import logging
+import time
 from typing import Dict, Any, List, Optional
+
+from openai import RateLimitError
 
 from .models import AIResult, Job
 from .config import AppConfig
@@ -17,6 +20,7 @@ class AIClient:
     """Client for AI integration via OpenRouter (free models)."""
     
     # OpenRouter free model (Meta Llama 3.3 70B - reliable, good for CV writing & JSON)
+    # Free tier rate limit: ~8 requests/minute. Retry logic handles transient 429s.
 
     def __init__(self, config: AppConfig):
         self.config = config
@@ -35,15 +39,40 @@ class AIClient:
 
     def _call(self, prompt: str, max_tokens: int = 2000) -> str:
         """Send a prompt to the AI and return the text response.
-        Uses OpenRouter via the OpenAI SDK."""
-        if self.openai_client:
-            response = self.openai_client.chat.completions.create(
-                model="meta-llama/llama-3.3-70b-instruct:free",
-                max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.choices[0].message.content.strip()
-        raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
+        Uses OpenRouter via the OpenAI SDK.
+        Retries with exponential backoff on 429 rate limit errors.
+        """
+        if not self.openai_client:
+            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
+        
+        max_retries = 5
+        base_delay = 5.0  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.openai_client.chat.completions.create(
+                    model="meta-llama/llama-3.3-70b-instruct:free",
+                    max_tokens=max_tokens,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return response.choices[0].message.content.strip()
+            except RateLimitError as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)  # 5s, 10s, 20s, 40s, 80s
+                    logger.warning(
+                        f"Rate limited (429) on attempt {attempt + 1}/{max_retries}. "
+                        f"Retrying in {delay:.0f}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(f"Rate limit exceeded after {max_retries} retries")
+                    raise
+            except Exception as e:
+                # Non-rate-limit errors: don't retry, just log and re-raise
+                logger.error(f"API call failed: {e}")
+                raise
+        
+        raise RuntimeError("Unreachable: _call retry loop exhausted")
 
     def _strip_fences(self, text: str) -> str:
         """Strip markdown code fences from AI response."""
