@@ -31,6 +31,7 @@ class AIClient:
             self.openai_client = OpenAI(
                 base_url="https://openrouter.ai/api/v1",
                 api_key=config.openrouter_api_key,
+                max_retries=0,  # Disable SDK auto-retry (we handle retries ourselves in _call)
                 default_headers={
                     "HTTP-Referer": "https://github.com/job-agent",
                     "X-Title": "Job Application Agent",

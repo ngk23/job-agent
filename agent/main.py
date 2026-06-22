@@ -257,11 +257,17 @@ async def run_agent(config: AppConfig):
             old_file.unlink(missing_ok=True)
         print(f"  [CLEAN] Cleared old data and output files for fresh run")
 
+    # Track when the last AI call happened (used by rate limiter during scoring)
+    _last_ai_call_time_global = 0.0
+
     # ── Auto-extract full profile from resume ──
     if resume_text and resume_text != "Resume on file":
         print(f"\n  [AI] Analyzing resume to extract profile details...")
+        # Rate-limit the profile extraction call too (it's an AI call on the free tier)
+        await asyncio.sleep(2.0)  # Small initial delay before first AI call
+        _last_ai_call_time_global = asyncio.get_event_loop().time()
         try:
-            extracted = ai_client.extract_full_profile(resume_text)
+            extracted = await asyncio.to_thread(ai_client.extract_full_profile, resume_text)
             if extracted and extracted.get('name'):
                 for field in ['name', 'email', 'phone', 'linkedin_url', 'github_url',
                              'address', 'current_title', 'current_company',
@@ -357,11 +363,12 @@ async def run_agent(config: AppConfig):
             await page_pool.put(p)
 
         # ── Rate limiter for OpenRouter free tier (~8 req/min for Llama 3.3 70B) ──
-        # We enforce a strict minimum 8.0s gap between AI API calls to never exceed the limit.
-        # Only 1 call at a time (semaphore=1) with a timed gate.
+        # We enforce a strict minimum 12.0s gap between AI API calls to never exceed the limit.
+        # _last_ai_call_time is initialized from the profile extraction call timestamp (if any)
+        # so the first scoring call respects the rate limit from the extraction call.
         _ai_rate_lock = asyncio.Lock()
-        _last_ai_call_time = 0.0
-        _min_ai_interval = 8.0  # seconds between AI calls (stays under 8 RPM)
+        _last_ai_call_time = _last_ai_call_time_global
+        _min_ai_interval = 12.0  # seconds between AI calls (5 RPM max, well under 8 RPM free tier)
 
         async def _rate_limited_ai_call(profile, job, resume_text) -> AIResult:
             """Make a rate-limited AI call. Guarantees at least `_min_ai_interval` seconds between calls."""
