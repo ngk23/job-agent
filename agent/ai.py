@@ -19,13 +19,20 @@ logger = logging.getLogger(__name__)
 class AIClient:
     """Client for AI integration via OpenRouter (free models)."""
     
-    # OpenRouter free model (Meta Llama 3.3 70B - reliable, good for CV writing & JSON)
-    # Free tier rate limit: ~8 requests/minute. Retry logic handles transient 429s.
+    # Free models to rotate through on rate-limit errors.
+    # Each model has its own rate limit bucket on OpenRouter, so rotating spreads
+    # our requests across multiple providers and avoids shared free-tier congestion.
+    FREE_MODELS = [
+        "meta-llama/llama-3.3-70b-instruct:free",  # Best overall quality
+        "qwen/qwen3-coder:free",                     # Strong alternative, less contended
+        "deepseek/deepseek-v4-flash:free",           # Fast, excellent for JSON/structured output
+    ]
 
     def __init__(self, config: AppConfig):
         self.config = config
         self.feedback_insights = ""
         self.openai_client = None
+        self._current_model_idx = 0  # Start with first free model
         if config.openrouter_api_key:
             from openai import OpenAI
             self.openai_client = OpenAI(
@@ -41,39 +48,46 @@ class AIClient:
     def _call(self, prompt: str, max_tokens: int = 2000) -> str:
         """Send a prompt to the AI and return the text response.
         Uses OpenRouter via the OpenAI SDK.
-        Retries with exponential backoff on 429 rate limit errors.
+        On 429 rate-limit errors, rotates to the next free model and retries
+        (each model has its own rate limit bucket on OpenRouter).
+        Only resorts to exponential backoff when ALL models have been exhausted.
         """
         if not self.openai_client:
             raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
         
-        max_retries = 5
-        base_delay = 5.0  # seconds
+        max_retries = len(self.FREE_MODELS) * 2  # Try each model up to 2 times
+        base_delay = 5.0  # seconds (only used after all models exhausted)
         
         for attempt in range(max_retries):
+            model = self.FREE_MODELS[self._current_model_idx]
             try:
                 response = self.openai_client.chat.completions.create(
-                    model="meta-llama/llama-3.3-70b-instruct:free",
+                    model=model,
                     max_tokens=max_tokens,
                     messages=[{"role": "user", "content": prompt}],
                 )
+                # Success! Reset model index back to primary for next call
+                self._current_model_idx = 0
                 return response.choices[0].message.content.strip()
             except RateLimitError as e:
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)  # 5s, 10s, 20s, 40s, 80s
-                    logger.warning(
-                        f"Rate limited (429) on attempt {attempt + 1}/{max_retries}. "
-                        f"Retrying in {delay:.0f}s..."
-                    )
+                # Rotate to next model (each has its own rate limit bucket)
+                self._current_model_idx = (self._current_model_idx + 1) % len(self.FREE_MODELS)
+                next_model = self.FREE_MODELS[self._current_model_idx]
+                logger.warning(
+                    f"Rate limited (429) on {model} — switching to {next_model}"
+                )
+                # After trying ALL models once, add backoff before cycling again
+                if attempt >= len(self.FREE_MODELS):
+                    delay = base_delay * (2 ** (attempt - len(self.FREE_MODELS)))
+                    logger.warning(f"All models exhausted, backing off {delay:.0f}s before retry...")
                     time.sleep(delay)
-                else:
-                    logger.error(f"Rate limit exceeded after {max_retries} retries")
-                    raise
             except Exception as e:
                 # Non-rate-limit errors: don't retry, just log and re-raise
-                logger.error(f"API call failed: {e}")
+                logger.error(f"API call failed on {model}: {e}")
                 raise
         
-        raise RuntimeError("Unreachable: _call retry loop exhausted")
+        logger.error(f"Rate limit exceeded after {max_retries} attempts across all free models")
+        raise RuntimeError("All free models rate-limited. Try again later or add an OpenRouter credit balance.")
 
     def _strip_fences(self, text: str) -> str:
         """Strip markdown code fences from AI response."""
