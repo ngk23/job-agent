@@ -611,37 +611,101 @@ async def scrape_monster(page, query: str, location: str, limit: int = 0) -> Lis
 
 
 async def get_description(page, job: Job, context=None) -> str:
-    """Get full job description from listing page. Recovers from page crashes."""
+    """Get full job description from listing page with multiple extraction strategies.
+    Tries to extract from the listing page first (using inline JSON-LD / meta tags),
+    then falls back to navigating to the full job page.
+    """
     if not job.url:
         return ""
     
-    # Step 1: Navigate with crash recovery
+    # Strategy 1: Navigate to the job page first (always navigate to the correct URL)
+    # This avoids extracting description from a previous job's page via the page pool
     try:
-        await page.goto(job.url, wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(2)
+        await page.goto(job.url, wait_until="domcontentloaded", timeout=35000)
+        await asyncio.sleep(3)
+        await dismiss_overlays(page)
     except Exception as e:
-        logger.warning(f"Page navigation failed for description: {e}. Creating new page...")
+        logger.warning(f"Navigation to {job.url[:60]}... failed: {e}")
+        # Try once more with a fresh page
         if context:
             try:
+                old_page = page
                 page = await context.new_page()
-                await page.goto(job.url, wait_until="domcontentloaded", timeout=30000)
-                await asyncio.sleep(2)
+                await page.goto(job.url, wait_until="domcontentloaded", timeout=35000)
+                await asyncio.sleep(3)
+                await dismiss_overlays(page)
             except Exception as e2:
-                logger.error(f"Description recovery also failed: {e2}")
+                logger.warning(f"Description recovery also failed: {e2}")
                 return ""
         else:
             return ""
-
-    # Step 2: Parse description
+    
+    # Strategy 2: Try to extract from embedded JSON-LD on the job page
+    try:
+        desc = await page.evaluate("""() => {
+          const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+          for (const s of scripts) {
+            try {
+              const data = JSON.parse(s.textContent);
+              if (data.description && data.description.length > 50) return data.description;
+              // Some job boards nest description under itemListElement
+              if (data.itemListElement && Array.isArray(data.itemListElement)) {
+                for (const item of data.itemListElement) {
+                  if (item.item && item.item.description && item.item.description.length > 50) 
+                    return item.item.description;
+                }
+              }
+            } catch(e) {}
+          }
+          // Try meta description
+          const meta = document.querySelector('meta[name="description"]');
+          if (meta && meta.getAttribute('content') && meta.getAttribute('content').length > 50)
+            return meta.getAttribute('content');
+          return null;
+        }""")
+        if desc and len(desc) > 50:
+            return desc[:3000]
+    except Exception:
+        pass
+    
+    # Strategy 3: Use broad selectors for each platform
+    # These are updated selectors that match current DOM structures
     try:
         selectors_map = {
-            Platform.LINKEDIN: [".description__text", ".job-details-summarize__content", "div[id='job-description']"],
-            Platform.INDEED: ["#jobDescriptionText", ".job-snippet"],
-            Platform.GLASSDOOR: ["[class*='description']", ".jobDescriptionContent"],
-            Platform.MONSTER: ["[data-testid='job-description']", ".job-description", "#jobDescriptionContent"],
+            Platform.LINKEDIN: [
+                ".description__text",
+                ".job-details-summarize__content",
+                ".job-description",
+                "div[id='job-description']",
+                "[class*='description']",
+                "article",
+                "main"
+            ],
+            Platform.INDEED: [
+                "#jobDescriptionText",
+                ".job-snippet",
+                "[class*='jobsearch-JobComponent']",
+                "[class*='description']",
+                "main"
+            ],
+            Platform.GLASSDOOR: [
+                "[class*='description']",
+                ".jobDescriptionContent",
+                "[data-testid='job-description']",
+                "article",
+                "main"
+            ],
+            Platform.MONSTER: [
+                "[data-testid='job-description']",
+                ".job-description",
+                "#jobDescriptionContent",
+                "[class*='description']",
+                "article",
+                "main"
+            ],
         }
         
-        selectors = selectors_map.get(job.platform, ["body"])
+        selectors = selectors_map.get(job.platform, ["body", "main", "article", "[class*='content']"])
         
         for selector in selectors:
             el = await robust_query(page, selector)
@@ -650,10 +714,17 @@ async def get_description(page, job: Job, context=None) -> str:
                 if text and len(text) > 50:
                     return text[:3000]
         
-        # Fallback to body
+        # Fallback: get all visible text from body
         body = await robust_query(page, "body")
         if body:
-            return (await get_text(body))[:3000]
+            text = await get_text(body)
+            # Filter out common non-content text
+            lines = [l.strip() for l in text.split('\n') if l.strip() and len(l.strip()) > 20]
+            if lines:
+                combined = '\n'.join(lines[:50])  # First 50 substantial lines
+                if len(combined) > 50:
+                    return combined[:3000]
+            return text[:3000]
             
     except Exception as e:
         logger.warning(f"Failed to get description for {job.url}: {e}")

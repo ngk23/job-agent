@@ -58,35 +58,10 @@ def _print_export_header(results: list):
     print(f"{'='*60}\n")
 
 
-# ─── AI Title Keywords ─────────────────────────────────────────────────────────
+# ─── Maximum jobs to score per run ────────────────────────────────────────────
+# Keeps total runtime reasonable given the 8s rate limit on free tier
+MAX_JOBS_TO_SCORE = 50
 
-AI_KEYWORDS = [
-    "ai", "artificial intelligence", "machine learning", "ml", "deep learning", "dl",
-    "computer vision", "cv", "nlp", "natural language", "neural network", "neural",
-    "data science", "data scientist", "llm", "large language model", "rag", "generative",
-    "gen ai", "genai", "automation", "robotics", "robot",
-    "tensorflow", "pytorch", "keras", "mlops", "prompt engineer", "prompting",
-    "transformer", "classification", "regression", "object detection",
-    "chatbot", "conversational", "speech", "vision", "image recognition",
-    "recommendation", "reinforcement learning", "time series", "forecasting",
-    "ai engineer", "ml engineer", "deep learning engineer", "ai/ml",
-    "ai developer", "machine learning engineer", "data engineer",
-    "cognitive", "intelligent", "predictive", "analytics",
-]
-
-
-def _is_ai_related(title: str, extra_keywords: list = None) -> bool:
-    """Check if a job title contains AI/ML/DL related keywords (case-insensitive).
-    Uses the default AI_KEYWORDS list merged with any extra keywords from profile.
-    """
-    keywords = AI_KEYWORDS.copy()
-    if extra_keywords:
-        for kw in extra_keywords:
-            kw_lower = kw.strip().lower()
-            if kw_lower and kw_lower not in keywords:
-                keywords.append(kw_lower)
-    lower_title = title.lower()
-    return any(kw in lower_title for kw in keywords)
 
 
 # ─── CV-Based Relevance Check ────────────────────────────────────────────────
@@ -439,27 +414,26 @@ async def run_agent(config: AppConfig):
                 await page_pool.put(page)
 
             if not job.description:
-                profile_keywords = profile.get('ai_keywords', [])
-                if _is_ai_related(job.title, profile_keywords):
-                    try:
-                        ai_result = await _rate_limited_title_call(profile, job, resume_text)
-                        score = ai_result.match_score
-                        async with lock:
-                            completed_count += 1
-                            tracker.save(job, ai_result)
-                            tag = "*" if score >= 40 else ""
-                            sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [T] {job.title[:35]:35s} -> {score}/100 (title only) {tag}\n")
-                            sys.stdout.flush()
-                        return
-                    except Exception as e:
-                        logger.error(f"Title-only AI error for {job.title}: {e}")
-
-                async with lock:
-                    completed_count += 1
-                    sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} SKIP: {job.title[:40]} - no description      \n")
-                    sys.stdout.flush()
-                tracker.save(job, AIResult(match_score=0))
-                return
+                # Use title-only AI scoring for ALL jobs, not just AI-related ones.
+                # This ensures every job gets scored even if description fetching fails.
+                try:
+                    ai_result = await _rate_limited_title_call(profile, job, resume_text)
+                    score = ai_result.match_score
+                    async with lock:
+                        completed_count += 1
+                        tracker.save(job, ai_result)
+                        tag = "*" if score >= 40 else ""
+                        sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [T] {job.title[:35]:35s} -> {score}/100 (title only) {tag}\n")
+                        sys.stdout.flush()
+                    return
+                except Exception as e:
+                    logger.error(f"Title-only AI error for {job.title}: {e}")
+                    async with lock:
+                        completed_count += 1
+                        sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} SKIP: {job.title[:40]} - title scoring failed      \n")
+                        sys.stdout.flush()
+                    tracker.save(job, AIResult(match_score=0))
+                    return
 
             # Step 2: AI scoring (rate-limited to 1 call per 8 seconds)
             try:
@@ -487,18 +461,23 @@ async def run_agent(config: AppConfig):
                 sys.stdout.flush()
 
         # Process all jobs (description fetching is concurrent, AI scoring is serial)
-        tasks = [score_one_job(job) for job in all_jobs]
+        # Cap at MAX_JOBS_TO_SCORE to keep runtime reasonable
+        jobs_to_score = all_jobs[:MAX_JOBS_TO_SCORE]
+        if len(all_jobs) > MAX_JOBS_TO_SCORE:
+            print(f"\n  ⚠ Scoring {MAX_JOBS_TO_SCORE} of {len(all_jobs)} jobs ({len(all_jobs) - MAX_JOBS_TO_SCORE} skipped — too many for free tier rate limits)")
+        tasks = [score_one_job(job) for job in jobs_to_score]
         await asyncio.gather(*tasks)
 
         # Cleanup page pool
         for p in pool_pages:
             await p.close()
 
-        # Final scoring summary
-        sys.stdout.write(f"\r  [{('#' * 30)}] {len(all_jobs)}/{len(all_jobs)} (100%) Scoring complete\n")
+        # Final scoring summary (use actual count scored, not total found)
+        jobs_actual = len(jobs_to_score)
+        sys.stdout.write(f"\r  [{('#' * 30)}] {jobs_actual}/{jobs_actual} (100%) Scoring complete\n")
         sys.stdout.flush()
 
-        print(f"\n  Results: {high_match_count} jobs with 80%+ match out of {len(all_jobs)} scored")
+        print(f"\n  Results: {high_match_count} jobs with 80%+ match out of {jobs_actual} scored")
 
         if config.save_session:
             await save_session(context, "linkedin")
