@@ -373,17 +373,53 @@ async def run_agent(config: AppConfig):
             pool_pages.append(p)
             await page_pool.put(p)
 
-        # Semaphore to limit concurrent AI API calls (reduced for free tier rate limits)
-        # OpenRouter free Llama 3.3 70B: ~8 req/min limit. We use semaphore=2 + staggered starts to stay under.
-        ai_semaphore = asyncio.Semaphore(2)
+        # ── Rate limiter for OpenRouter free tier (~8 req/min for Llama 3.3 70B) ──
+        # We enforce a strict minimum 8.0s gap between AI API calls to never exceed the limit.
+        # Only 1 call at a time (semaphore=1) with a timed gate.
+        _ai_rate_lock = asyncio.Lock()
+        _last_ai_call_time = 0.0
+        _min_ai_interval = 8.0  # seconds between AI calls (stays under 8 RPM)
 
-        async def score_one_job(job: Job, index: int = 0):
+        async def _rate_limited_ai_call(profile, job, resume_text) -> AIResult:
+            """Make a rate-limited AI call. Guarantees at least `_min_ai_interval` seconds between calls."""
+            nonlocal _last_ai_call_time
+            
+            async with _ai_rate_lock:
+                # Wait if we've called too recently
+                now = asyncio.get_event_loop().time()
+                elapsed = now - _last_ai_call_time
+                if elapsed < _min_ai_interval:
+                    wait = _min_ai_interval - elapsed
+                    print(f"\r  ⏳ Rate-limit wait: {wait:.1f}s ...")
+                    sys.stdout.flush()
+                    await asyncio.sleep(wait)
+                
+                # Make the actual AI call
+                ai_result = await asyncio.to_thread(
+                    ai_client.tailor_application, profile, job, resume_text
+                )
+                _last_ai_call_time = asyncio.get_event_loop().time()
+                return ai_result
+
+        async def _rate_limited_title_call(profile, job, resume_text) -> AIResult:
+            """Make a rate-limited title-only AI call."""
+            nonlocal _last_ai_call_time
+            
+            async with _ai_rate_lock:
+                now = asyncio.get_event_loop().time()
+                elapsed = now - _last_ai_call_time
+                if elapsed < _min_ai_interval:
+                    wait = _min_ai_interval - elapsed
+                    await asyncio.sleep(wait)
+                
+                ai_result = await asyncio.to_thread(
+                    ai_client.score_by_title_only, profile, job, resume_text
+                )
+                _last_ai_call_time = asyncio.get_event_loop().time()
+                return ai_result
+
+        async def score_one_job(job: Job):
             nonlocal high_match_count, completed_count
-
-            # Stagger the start of each job to spread out AI requests over time
-            # Each job waits an extra 1.5s * its index before starting, so requests
-            # are naturally spaced out and don't all hit the API at once.
-            await asyncio.sleep(index * 1.5)
 
             # Step 1: Fetch description (uses a page from the pool)
             page = await page_pool.get()
@@ -397,23 +433,18 @@ async def run_agent(config: AppConfig):
             if not job.description:
                 profile_keywords = profile.get('ai_keywords', [])
                 if _is_ai_related(job.title, profile_keywords):
-                    async with ai_semaphore:
-                        # Extra delay before the AI call to respect rate limits
-                        await asyncio.sleep(2.0)
-                        try:
-                            ai_result = await asyncio.to_thread(
-                                ai_client.score_by_title_only, profile, job, resume_text
-                            )
-                            score = ai_result.match_score
-                            async with lock:
-                                completed_count += 1
-                                tracker.save(job, ai_result)
-                                tag = "*" if score >= 40 else ""
-                                sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [T] {job.title[:35]:35s} -> {score}/100 (title only) {tag}\n")
-                                sys.stdout.flush()
-                            return
-                        except Exception as e:
-                            logger.error(f"Title-only AI error for {job.title}: {e}")
+                    try:
+                        ai_result = await _rate_limited_title_call(profile, job, resume_text)
+                        score = ai_result.match_score
+                        async with lock:
+                            completed_count += 1
+                            tracker.save(job, ai_result)
+                            tag = "*" if score >= 40 else ""
+                            sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [T] {job.title[:35]:35s} -> {score}/100 (title only) {tag}\n")
+                            sys.stdout.flush()
+                        return
+                    except Exception as e:
+                        logger.error(f"Title-only AI error for {job.title}: {e}")
 
                 async with lock:
                     completed_count += 1
@@ -422,23 +453,18 @@ async def run_agent(config: AppConfig):
                 tracker.save(job, AIResult(match_score=0))
                 return
 
-            # Step 2: AI scoring (rate-limited by semaphore, run in thread to not block event loop)
-            async with ai_semaphore:
-                # Extra delay before the AI call to respect rate limits
-                await asyncio.sleep(2.0)
-                try:
-                    ai_result = await asyncio.to_thread(
-                        ai_client.tailor_application, profile, job, resume_text
-                    )
-                    score = ai_result.match_score
-                except Exception as e:
-                    logger.error(f"AI error for {job.title}: {e}")
-                    async with lock:
-                        completed_count += 1
-                        sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [X] {job.title[:35]:35s} -> ERROR\n")
-                        sys.stdout.flush()
-                    tracker.save(job, AIResult(match_score=0))
-                    return
+            # Step 2: AI scoring (rate-limited to 1 call per 8 seconds)
+            try:
+                ai_result = await _rate_limited_ai_call(profile, job, resume_text)
+                score = ai_result.match_score
+            except Exception as e:
+                logger.error(f"AI error for {job.title}: {e}")
+                async with lock:
+                    completed_count += 1
+                    sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [X] {job.title[:35]:35s} -> ERROR\n")
+                    sys.stdout.flush()
+                tracker.save(job, AIResult(match_score=0))
+                return
 
             # Step 3: Record result (under lock to protect shared state + file writes)
             async with lock:
@@ -452,8 +478,8 @@ async def run_agent(config: AppConfig):
                     sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [  ] {job.title[:35]:35s} -> {score}/100\n")
                 sys.stdout.flush()
 
-        # Process all jobs concurrently with staggered starts
-        tasks = [score_one_job(job, i) for i, job in enumerate(all_jobs)]
+        # Process all jobs (description fetching is concurrent, AI scoring is serial)
+        tasks = [score_one_job(job) for job in all_jobs]
         await asyncio.gather(*tasks)
 
         # Cleanup page pool
