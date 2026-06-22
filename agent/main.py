@@ -89,15 +89,77 @@ def _is_ai_related(title: str, extra_keywords: list = None) -> bool:
     return any(kw in lower_title for kw in keywords)
 
 
+# ─── CV-Based Relevance Check ────────────────────────────────────────────────
+
+
+def _job_title_matches_skills(title: str, skills: list, target_roles: list) -> bool:
+    """Quickly check if a job title shares keywords with the candidate's skills or target roles.
+    This is a lightweight pre-filter to skip obviously irrelevant jobs before AI scoring.
+    """
+    lower_title = title.lower()
+    
+    # Build keyword set from skills (extract meaningful words)
+    skill_keywords = set()
+    for skill in skills:
+        for word in skill.lower().split():
+            word = word.strip(" ,.()-/")
+            if len(word) > 2:  # Skip very short words
+                skill_keywords.add(word)
+    
+    # Check if any skill keyword appears in the title
+    for kw in skill_keywords:
+        if kw in lower_title:
+            return True
+    
+    # Check if any target role word appears in the title
+    for role in target_roles:
+        role_words = role.lower().split()
+        # Match if at least 2 words from the role appear in the title
+        matches = sum(1 for w in role_words if len(w) > 2 and w in lower_title)
+        if matches >= 2 or (len(role_words) == 1 and matches >= 1):
+            return True
+    
+    return False
+
+
 # ─── Search ────────────────────────────────────────────────────────────────────
 
 async def run_search(profile: dict, context, limit: int = 0):
     """Execute job search across all platforms in parallel.
     Creates one browser page per platform and runs scrapers concurrently.
+    Generates smart queries by combining target roles with top CV skills.
     """
     queries = profile.get("target_roles", ["software engineer"])
+    skills = profile.get("skills", [])
     # Use AGENT_LOCATION env var if set (from dashboard region selector), otherwise profile location
     location = os.environ.get("AGENT_LOCATION", "") or profile.get("preferred_location", "Remote")
+
+    # ── Enhance search queries with top CV skills ──
+    enhanced_queries = []
+    top_skills = [s for s in skills if s][:5]  # Use top 5 skills
+    
+    for role in queries:
+        # Always include the base role query
+        enhanced_queries.append(role)
+        # Also generate role + skill combinations for more targeted searches
+        for skill in top_skills:
+            skill_short = skill.split(" ")[0] if len(skill) > 15 else skill
+            combined = f"{role} {skill_short}"
+            if combined not in enhanced_queries:
+                enhanced_queries.append(combined)
+    
+    # If we have too many queries, prioritize the most diverse ones
+    if len(enhanced_queries) > 12:
+        # Keep base roles + unique skill combinations
+        unique_skills_combined = []
+        seen_skills = set()
+        for role in queries:
+            for skill in top_skills:
+                skill_word = skill.split()[0].lower() if skill.split() else ""
+                if skill_word not in seen_skills:
+                    seen_skills.add(skill_word)
+                    unique_skills_combined.append(f"{role} {skill.split()[0] if skill.split() else skill}")
+        enhanced_queries = queries + unique_skills_combined[:8]
 
     all_jobs = []
 
@@ -108,7 +170,7 @@ async def run_search(profile: dict, context, limit: int = 0):
     page_monster = await context.new_page()
 
     try:
-        for query in queries:
+        for query in enhanced_queries:
             print(f"\n[SEARCH] Searching for: '{query}'")
 
             # Fire all 4 platform scrapers concurrently
@@ -133,12 +195,33 @@ async def run_search(profile: dict, context, limit: int = 0):
         for p in [page_linkedin, page_indeed, page_glassdoor, page_monster]:
             await p.close()
 
+    # ── Smart deduplication: by URL first, then by (title + company) across platforms ──
     seen_urls = set()
+    seen_title_company = set()  # Lowercase (title, company) pairs
     unique_jobs = []
+    
     for job in all_jobs:
-        if job.url and job.url not in seen_urls:
+        # Dedup by URL
+        if job.url and job.url in seen_urls:
+            continue
+        if job.url:
             seen_urls.add(job.url)
-            unique_jobs.append(job)
+        
+        # Dedup by title+company (catches same job posted on multiple platforms)
+        title_company_key = (job.title.strip().lower(), job.company.strip().lower())
+        if title_company_key in seen_title_company:
+            continue
+        seen_title_company.add(title_company_key)
+        
+        unique_jobs.append(job)
+
+    # ── Pre-filter: remove jobs whose titles don't match CV skills at all ──
+    if skills or queries:
+        before = len(unique_jobs)
+        unique_jobs = [j for j in unique_jobs if _job_title_matches_skills(j.title, skills, queries)]
+        filtered = before - len(unique_jobs)
+        if filtered:
+            print(f"\n[FILTER] Removed {filtered} irrelevant jobs (title doesn't match CV skills)")
 
     return unique_jobs
 
