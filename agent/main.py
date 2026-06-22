@@ -99,11 +99,12 @@ def _job_title_matches_skills(title: str, skills: list, target_roles: list) -> b
     lower_title = title.lower()
     
     # Build keyword set from skills (extract meaningful words)
+    # Include ALL words with length >= 2 to catch short keywords like "AI", "ML", "NLP", "CV", "DL"
     skill_keywords = set()
     for skill in skills:
         for word in skill.lower().split():
             word = word.strip(" ,.()-/")
-            if len(word) > 2:  # Skip very short words
+            if len(word) >= 2:  # Keep short keywords like "ai", "ml", "nlp", "cv", "dl"
                 skill_keywords.add(word)
     
     # Check if any skill keyword appears in the title
@@ -111,13 +112,20 @@ def _job_title_matches_skills(title: str, skills: list, target_roles: list) -> b
         if kw in lower_title:
             return True
     
-    # Check if any target role word appears in the title
+    # Check if any target ROLE (the full role phrase) appears in the title
+    # E.g. "AI Engineer" should match a title containing "AI Engineer"
+    for role in target_roles:
+        role_lower = role.lower()
+        if role_lower in lower_title:
+            return True
+    
+    # Also check individual words from target roles (with len >= 2)
+    # This catches "Engineer" in "Senior AI Engineer", "ML" in "ML Engineer", etc.
     for role in target_roles:
         role_words = role.lower().split()
-        # Match if at least 2 words from the role appear in the title
-        matches = sum(1 for w in role_words if len(w) > 2 and w in lower_title)
-        if matches >= 2 or (len(role_words) == 1 and matches >= 1):
-            return True
+        for w in role_words:
+            if len(w) >= 2 and w in lower_title:
+                return True
     
     return False
 
