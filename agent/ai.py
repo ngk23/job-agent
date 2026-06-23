@@ -1,6 +1,6 @@
 """
 AI integration for job application tailoring.
-Uses OpenRouter (via OpenAI SDK) for all AI operations.
+Uses Groq (preferred) or OpenRouter via the OpenAI SDK.
 """
 
 import json
@@ -15,52 +15,100 @@ from .config import AppConfig
 
 logger = logging.getLogger(__name__)
 
+# Groq rate limit: 30 requests per minute (free tier) = 1 req / 2s comfortably
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+GROQ_RATE_LIMIT_DELAY = 2.0  # seconds between requests for Groq
+
+# OpenRouter free tier: ~5 requests per minute = 1 req / 12s comfortably
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_RATE_LIMIT_DELAY = 12.0  # seconds between requests for OpenRouter
+
+# Groq free models (all active as of mid-2026, 30 req/min shared pool)
+GROQ_MODELS = [
+    "llama3-70b-8192",         # Best quality on Groq (80k context)
+    "mixtral-8x7b-32768",      # Strong alternative (32k context)
+    "llama3-8b-8192",          # Fast fallback (8k context)
+]
+
+# OpenRouter free models (each has its own rate limit bucket)
+OPENROUTER_MODELS = [
+    "meta-llama/llama-3.3-70b-instruct:free",  # Best overall quality
+    "qwen/qwen3-coder:free",                     # Strong alternative, less contended
+    "google/gemma-4-31b-it:free",                # Good fallback, rarely congested
+]
+
 
 class AIClient:
-    """Client for AI integration via OpenRouter (free models)."""
+    """Client for AI integration via Groq (preferred) or OpenRouter.
     
-    # Free models to rotate through on rate-limit errors.
-    # Each model has its own rate limit bucket on OpenRouter, so rotating spreads
-    # our requests across multiple providers and avoids shared free-tier congestion.
-    FREE_MODELS = [
-        "meta-llama/llama-3.3-70b-instruct:free",  # Best overall quality
-        "qwen/qwen3-coder:free",                     # Strong alternative, less contended
-        "google/gemma-4-31b-it:free",                # Good fallback, rarely congested
-    ]
+    - Groq: 30 req/min free tier, ~2s per request. Models: Llama 3 70B, Mixtral, Llama 3 8B.
+    - OpenRouter: ~5 req/min free tier (spread across model buckets).
+    
+    Groq is auto-selected when GROQ_API_KEY is set (faster & more generous free tier).
+    """
 
     def __init__(self, config: AppConfig):
         self.config = config
         self.feedback_insights = ""
         self.openai_client = None
-        self._current_model_idx = 0  # Start with first free model
-        if config.openrouter_api_key:
+        self._current_model_idx = 0
+        self._using_groq = False  # Track which provider we're using
+
+        # Prefer Groq if the key is set (faster free tier, 30 req/min)
+        if config.groq_api_key:
             from openai import OpenAI
             self.openai_client = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
+                base_url=GROQ_BASE_URL,
+                api_key=config.groq_api_key,
+                max_retries=0,
+            )
+            self._using_groq = True
+            self.MODELS = list(GROQ_MODELS)
+            self.rate_limit_delay = GROQ_RATE_LIMIT_DELAY
+            self._provider_name = "Groq"
+            logger.info(f"AI client initialized with Groq (%s models, ~%ds/req)", 
+                        len(self.MODELS), self.rate_limit_delay)
+        elif config.openrouter_api_key:
+            from openai import OpenAI
+            self.openai_client = OpenAI(
+                base_url=OPENROUTER_BASE_URL,
                 api_key=config.openrouter_api_key,
-                max_retries=0,  # Disable SDK auto-retry (we handle retries ourselves in _call)
+                max_retries=0,
                 default_headers={
                     "HTTP-Referer": "https://github.com/job-agent",
                     "X-Title": "Job Application Agent",
                 },
             )
+            self.MODELS = list(OPENROUTER_MODELS)
+            self.rate_limit_delay = OPENROUTER_RATE_LIMIT_DELAY
+            self._provider_name = "OpenRouter"
+            logger.info(f"AI client initialized with OpenRouter (%s models, ~%ds/req)",
+                        len(self.MODELS), self.rate_limit_delay)
 
     def _call(self, prompt: str, max_tokens: int = 2000) -> str:
         """Send a prompt to the AI and return the text response.
-        Uses OpenRouter via the OpenAI SDK.
-        On 429 rate-limit errors, rotates to the next free model and retries
-        (each model has its own rate limit bucket on OpenRouter).
+        Uses Groq or OpenRouter via the OpenAI SDK.
+        On 429 rate-limit errors, rotates to the next model and retries.
         Only resorts to exponential backoff when ALL models have been exhausted.
+        
+        A small delay is added between requests to stay within rate limits.
+        Groq: 30 req/min (2s delay). OpenRouter: ~5 req/min shared (12s delay).
         """
         if not self.openai_client:
-            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
+            raise EnvironmentError(
+                "No API key configured. Set GROQ_API_KEY (recommended) or OPENROUTER_API_KEY"
+            )
         
-        max_retries = len(self.FREE_MODELS) * 2  # Try each model up to 2 times
-        base_delay = 5.0  # seconds (only used after all models exhausted)
+        max_retries = len(self.MODELS) * 2  # Try each model up to 2 times
+        base_delay = self.rate_limit_delay  # Provider-specific rate limit delay
         
         for attempt in range(max_retries):
-            model = self.FREE_MODELS[self._current_model_idx]
+            model = self.MODELS[self._current_model_idx]
             try:
+                # Small delay to stay within rate limits
+                if attempt > 0:
+                    time.sleep(base_delay * 0.5)
+                
                 response = self.openai_client.chat.completions.create(
                     model=model,
                     max_tokens=max_tokens,
@@ -71,29 +119,31 @@ class AIClient:
                 return response.choices[0].message.content.strip()
             except (RateLimitError, NotFoundError, APIConnectionError, APITimeoutError) as e:
                 # Recoverable error: rotate to next model and retry.
-                # Each model has its own rate limit bucket and availability.
-                self._current_model_idx = (self._current_model_idx + 1) % len(self.FREE_MODELS)
-                next_model = self.FREE_MODELS[self._current_model_idx]
+                self._current_model_idx = (self._current_model_idx + 1) % len(self.MODELS)
+                next_model = self.MODELS[self._current_model_idx]
                 
                 if isinstance(e, NotFoundError):
-                    logger.warning(f"Model {model} unavailable (404) — permanently skipping, switching to {next_model}")
+                    logger.warning(f"[{self._provider_name}] Model {model} unavailable (404) — skipping, switching to {next_model}")
                 elif isinstance(e, RateLimitError):
-                    logger.warning(f"Rate limited (429) on {model} — switching to {next_model}")
+                    logger.warning(f"[{self._provider_name}] Rate limited (429) on {model} — switching to {next_model}")
                 else:
-                    logger.warning(f"Connection error on {model}: {e} — switching to {next_model}")
+                    logger.warning(f"[{self._provider_name}] Connection error on {model}: {e} — switching to {next_model}")
                 
                 # After trying ALL models once, add backoff before cycling again
-                if attempt >= len(self.FREE_MODELS):
-                    delay = base_delay * (2 ** (attempt - len(self.FREE_MODELS)))
-                    logger.warning(f"All models exhausted, backing off {delay:.0f}s before retry...")
+                if attempt >= len(self.MODELS):
+                    delay = base_delay * (2 ** (attempt - len(self.MODELS)))
+                    logger.warning(f"[{self._provider_name}] All models exhausted, backing off {delay:.0f}s before retry...")
                     time.sleep(delay)
             except Exception as e:
                 # Non-recoverable errors (auth, bad request, etc.): crash immediately
-                logger.error(f"Fatal API error on {model}: {e}")
+                logger.error(f"[{self._provider_name}] Fatal API error on {model}: {e}")
                 raise
         
-        logger.error(f"Rate limit exceeded after {max_retries} attempts across all free models")
-        raise RuntimeError("All free models rate-limited. Try again later or add an OpenRouter credit balance.")
+        logger.error(f"[{self._provider_name}] All API attempts failed after {max_retries} retries")
+        raise RuntimeError(
+            f"{self._provider_name} all models rate-limited. Try again later "
+            f"or {'add an OpenRouter credit balance' if not self._using_groq else 'check your Groq API key'}"
+        )
 
     def _strip_fences(self, text: str) -> str:
         """Strip markdown code fences from AI response."""
@@ -122,7 +172,7 @@ class AIClient:
             Generated CV as a formatted string
         """
         if not self.is_available:
-            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
+            raise EnvironmentError("No API key configured. Set GROQ_API_KEY (recommended) or OPENROUTER_API_KEY")
         
         skills_str = ', '.join(profile.get('skills', []))
         roles_str = ', '.join(profile.get('target_roles', []))
@@ -193,7 +243,7 @@ Return ONLY the CV text, properly formatted with clear sections. Do not include 
             List of suggested target role titles to search for
         """
         if not self.is_available:
-            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
+            raise EnvironmentError("No API key configured. Set GROQ_API_KEY or OPENROUTER_API_KEY")
         
         current_roles_str = ', '.join(current_roles) if current_roles else 'Not specified'
         
@@ -233,7 +283,7 @@ Do not include any other text or explanation."""
         Uses a simpler prompt that scores based on title + skills alignment.
         """
         if not self.is_available:
-            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
+            raise EnvironmentError("No API key configured. Set GROQ_API_KEY or OPENROUTER_API_KEY")
 
         skills_str = ', '.join(profile.get('skills', []))
         roles_str = ', '.join(profile.get('target_roles', []))
@@ -290,7 +340,7 @@ Respond in JSON only:
         experience, education, and suggested target roles.
         """
         if not self.is_available:
-            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
+            raise EnvironmentError("No API key configured. Set GROQ_API_KEY or OPENROUTER_API_KEY")
 
         prompt = f"""You are an expert resume parser. Extract a structured profile from the following resume/CV text.
 
@@ -332,7 +382,7 @@ Rules:
     def tailor_application(self, profile: Dict[str, Any], job: Job, resume_text: str = "") -> AIResult:
         """Use AI to score job match and write tailored cover letter."""
         if not self.is_available:
-            raise EnvironmentError("No API key configured. Set OPENROUTER_API_KEY")
+            raise EnvironmentError("No API key configured. Set GROQ_API_KEY (recommended) or OPENROUTER_API_KEY")
         
         skills_str = ', '.join(profile.get('skills', []))
         roles_str = ', '.join(profile.get('target_roles', []))

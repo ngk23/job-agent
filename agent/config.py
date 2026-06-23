@@ -25,10 +25,12 @@ def validate_config(config: "AppConfig") -> bool:
 
 def validate_config_run(config: "AppConfig") -> bool:
     """Validate configuration specifically for the 'run' command (requires API key)."""
-    if not config.openrouter_api_key:
-        print("[ERROR] No API key found. Set:")
+    if not config.openrouter_api_key and not config.groq_api_key:
+        print("[ERROR] No API key found. Set either:")
         print('   OPENROUTER_API_KEY="sk-or-..."   (via OpenRouter, free tier available)')
-        print("Get a free key at https://openrouter.ai")
+        print('   — or —')
+        print('   GROQ_API_KEY="gsk_..."           (via Groq, faster free tier, 30 req/min)')
+        print("Get a free key at https://console.groq.com")
         return False
     return True
 
@@ -39,6 +41,7 @@ class AppConfig:
 
     # API Keys
     openrouter_api_key: str = ""
+    groq_api_key: str = ""
 
     # Profile
     profile_path: str = "profiles/profile.json"
@@ -72,6 +75,7 @@ class AppConfig:
     def __post_init__(self):
         """Load config from environment variables."""
         self.openrouter_api_key = get_env("OPENROUTER_API_KEY", self.openrouter_api_key)
+        self.groq_api_key = get_env("GROQ_API_KEY", self.groq_api_key)
         self.profile_path = get_env("PROFILE_PATH", self.profile_path)
         self.resume_path = get_env("RESUME_PATH", self.resume_path) or self.resume_path
         self.headless = get_env("HEADLESS", "false").lower() == "true" or self.headless
