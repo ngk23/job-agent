@@ -3810,6 +3810,22 @@ async function showHackAnimation(email) {
         if _run_thread and _run_thread.is_alive():
             return jsonify({'error': 'Agent is already running'}), 409
 
+        # Check daily usage limits before starting
+        init_usage_table()
+        current_user_id = get_user_id()
+        if current_user_id:
+            usage_check = can_run_search(current_user_id)
+            if not usage_check.get('allowed', False):
+                reason = usage_check.get('reason', 'Daily limit reached')
+                logger.warning(f"User {current_user_id} blocked by usage limits: {reason}")
+                return jsonify({
+                    'status': 'error',
+                    'error': reason,
+                    'usage_blocked': True,
+                    'usage_info': usage_check,
+                }), 429
+            increment_search_count(current_user_id)
+
         # Reset state
         _output_queue = queue.Queue()
         _run_complete = False
