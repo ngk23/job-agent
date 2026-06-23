@@ -19,6 +19,7 @@ from .feedback_learning import get_feedback_insights_for_prompt
 from .form_filler import JobApplicationAgent, map_profile_to_form_filler
 from .models import Job, Platform, AIResult
 from .word_exporter import export_jobs_to_word, export_scored_jobs_to_word, ScoredJob
+from .notifier import send_job_alert
 
 
 # ─── Progress helpers ──────────────────────────────────────────────────────────
@@ -351,6 +352,7 @@ async def run_agent(config: AppConfig):
         _print_scoring_header(len(all_jobs))
 
         scored_jobs = []
+        alertable_jobs = []  # Jobs with 60%+ score for email alerts
         high_match_count = 0
         completed_count = 0
         lock = asyncio.Lock()
@@ -434,6 +436,16 @@ async def run_agent(config: AppConfig):
                         tracker.save(job, ai_result)
                         tag = "*" if score >= 40 else ""
                         sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [T] {job.title[:35]:35s} -> {score}/100 (title only) {tag}\n")
+                        # Also collect title-only alertable jobs (60%+)
+                        if score >= 60:
+                            alertable_jobs.append({
+                                "title": job.title,
+                                "company": job.company,
+                                "score": score,
+                                "url": job.url,
+                                "skills": ai_result.matching_skills,
+                                "is_title_only": True,
+                            })
                         sys.stdout.flush()
                     return
                 except Exception as e:
@@ -468,6 +480,16 @@ async def run_agent(config: AppConfig):
                     sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [OK] {job.title[:35]:35s} -> {score}/100 *\n")
                 else:
                     sys.stdout.write(f"\r  {completed_count}/{len(all_jobs)} [  ] {job.title[:35]:35s} -> {score}/100\n")
+                # Collect alertable jobs (60%+) for email notification
+                if score >= 60:
+                    alertable_jobs.append({
+                        "title": job.title,
+                        "company": job.company,
+                        "score": score,
+                        "url": job.url,
+                        "skills": ai_result.matching_skills,
+                        "is_title_only": False,
+                    })
                 sys.stdout.flush()
 
         # Process all jobs (description fetching is concurrent, AI scoring is serial)
@@ -493,6 +515,25 @@ async def run_agent(config: AppConfig):
             await save_session(context, "linkedin")
 
         await browser.close()
+
+    # ── Email Alert: Send top matches to user's email (auto-extracted from CV) ──
+    user_email = profile.get("email", "")
+    user_name = profile.get("name", "User")
+    if alertable_jobs and user_email:
+        print(f"\n  [EMAIL] Sending alert with {len(alertable_jobs)} top matches to {user_email}...")
+        try:
+            sent = send_job_alert(user_email, user_name, alertable_jobs)
+            if sent:
+                print(f"  [EMAIL] ✅ Alert sent to {user_email}")
+            else:
+                print(f"  [EMAIL] ⚠ Gmail SMTP not configured. Set GMAIL_USER + GMAIL_APP_PASSWORD env vars or configure in Admin panel.")
+        except Exception as e:
+            logger.error(f"Failed to send job alert email: {e}")
+            print(f"  [EMAIL] ❌ Failed to send alert: {e}")
+    elif not user_email:
+        print(f"\n  [EMAIL] ⚠ No email found in profile - could not send job alert. Upload a resume with your email address.")
+    else:
+        print(f"\n  [EMAIL] No jobs scored 60%+ - no email sent.")
 
     # ── Phase 3: Generate CVs ──
     cv_texts = {}
