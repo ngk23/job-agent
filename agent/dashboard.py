@@ -3857,7 +3857,7 @@ async function showHackAnimation(email) {
             yield f"data: [SYSTEM] Starting agent with CV: {_uploaded_filename}\n\n"
             yield f"data: [SYSTEM] Analyzing resume, generating search keywords...\n\n"
 
-            api_key = _gui_api_key or config.openrouter_api_key
+            api_key = _gui_api_key or config.groq_api_key or config.openrouter_api_key
             thread = threading.Thread(
                 target=_run_agent_in_thread,
                 args=(work_dir, api_key, current_user_id),
