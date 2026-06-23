@@ -147,12 +147,19 @@ def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = N
     if not api_key:
         api_key = env.get("OPENROUTER_API_KEY", "")
     if not api_key:
+        api_key = env.get("GROQ_API_KEY", "")
+    if not api_key:
         _output_queue.put("[ERROR] No API key configured. Cannot run agent.\n")
-        _output_queue.put("[ERROR] Set OPENROUTER_API_KEY in environment/secret.\n")
+        _output_queue.put("[ERROR] Set GROQ_API_KEY (recommended) or OPENROUTER_API_KEY in environment/secret.\n")
         _run_complete = True
         return
     # Ensure the subprocess has the OpenRouter key
-    env["OPENROUTER_API_KEY"] = api_key
+    # Pass both API keys to the subprocess (handles Groq vs OpenRouter detection)
+    if api_key.startswith("gsk_"):
+        env["GROQ_API_KEY"] = api_key
+        env["OPENROUTER_API_KEY"] = ""
+    else:
+        env["OPENROUTER_API_KEY"] = api_key
 
     # Pass the selected region to the agent
     env["AGENT_LOCATION"] = _selected_region
@@ -210,7 +217,8 @@ def _agent_status():
     }
 
 
-# ── Dashboard App ─────────────────────────────────────────────────────────────
+# ── Dashboard App
+# FIXED_GROQ_BUGS ─────────────────────────────────────────────────────────────
 
 def create_dashboard_app(config: AppConfig):
     """Create and configure the GUI Flask app."""
@@ -4041,7 +4049,11 @@ async function showHackAnimation(email) {
         s = _agent_status()
         uid = get_user_id()
         user = get_current_user()
-        s['api_key_configured'] = bool(_gui_api_key or config.openrouter_api_key)
+        # Check if either Groq or OpenRouter API key is configured
+        has_router_key = bool(_gui_api_key or config.openrouter_api_key)
+        has_groq_key = bool(config.groq_api_key)
+        s['api_key_configured'] = has_router_key or has_groq_key
+        s['using_groq'] = has_groq_key
         s['uploaded_filename'] = _uploaded_filename
         s['selected_region'] = _selected_region
         s['user'] = {
