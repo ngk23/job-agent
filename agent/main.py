@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .config import AppConfig, load_profile, load_config, validate_config_run
 from .utils import setup_logging, RateLimiter, ResumeHandler, save_session, load_session
-from .scrapers import scrape_linkedin, scrape_indeed, scrape_glassdoor, scrape_monster, get_description
+from .scrapers import scrape_linkedin, scrape_indeed, scrape_glassdoor, scrape_monster, scrape_reed, scrape_adzuna, get_description
 from .ai import AIClient
 from .tracker import ApplicationTracker
 from .dashboard import run_dashboard
@@ -156,21 +156,23 @@ async def run_search(profile: dict, context, limit: int = 0):
         for query in enhanced_queries:
             print(f"\n[SEARCH] Searching for: '{query}'")
 
-            # Fire all 4 platform scrapers concurrently
+            # Fire all platform scrapers concurrently (browser + API)
             tasks = [
                 scrape_linkedin(page_linkedin, query, location, limit=limit),
                 scrape_indeed(page_indeed, query, location, limit=limit),
                 scrape_glassdoor(page_glassdoor, query, location, limit=limit),
                 scrape_monster(page_monster, query, location, limit=limit),
+                scrape_reed(query, location, limit=limit),
+                scrape_adzuna(query, location, limit=limit),
             ]
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            platforms = ["LinkedIn", "Indeed", "Glassdoor", "Monster"]
+            platforms = ["LinkedIn", "Indeed", "Glassdoor", "Monster", "Reed", "Adzuna"]
             for platform_name, result in zip(platforms, results):
                 if isinstance(result, Exception):
                     print(f"   {platform_name} search failed: {result}")
-                else:
+                elif isinstance(result, list):
                     print(f"   Found {len(result)} {platform_name} jobs")
                     all_jobs.extend(result)
     finally:
@@ -411,14 +413,15 @@ async def run_agent(config: AppConfig):
         async def score_one_job(job: Job):
             nonlocal high_match_count, completed_count
 
-            # Step 1: Fetch description (uses a page from the pool)
-            page = await page_pool.get()
-            try:
-                job.description = await get_description(page, job, context)
-            except Exception:
-                job.description = ""
-            finally:
-                await page_pool.put(page)
+            # Step 1: Fetch description (if not already provided by API scrapers like Reed/Adzuna)
+            if not job.description:
+                page = await page_pool.get()
+                try:
+                    job.description = await get_description(page, job, context)
+                except Exception:
+                    job.description = ""
+                finally:
+                    await page_pool.put(page)
 
             if not job.description:
                 # Use title-only AI scoring for ALL jobs, not just AI-related ones.

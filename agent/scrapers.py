@@ -1,12 +1,15 @@
 """
-Browser automation scrapers for job platforms.
+Browser automation scrapers + API scrapers for job platforms.
 """
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from urllib.parse import quote
+
+import httpx
 
 from .models import Job, Platform
 
@@ -730,3 +733,161 @@ async def get_description(page, job: Job, context=None) -> str:
         logger.warning(f"Failed to get description for {job.url}: {e}")
     
     return ""
+
+
+# ─── API-Based Scrapers (no browser needed!) ──────────────────────────────────
+# Reed and Adzuna provide official REST APIs that return structured JSON.
+# These are much faster and more reliable than browser scraping.
+
+
+def _get_api_keys() -> dict:
+    """Get API keys for Reed and Adzuna from environment variables."""
+    return {
+        "reed_api_key": os.environ.get("REED_API_KEY", ""),
+        "adzuna_app_id": os.environ.get("ADZUNA_APP_ID", ""),
+        "adzuna_app_key": os.environ.get("ADZUNA_APP_KEY", ""),
+        "adzuna_country": os.environ.get("ADZUNA_COUNTRY", "gb"),
+    }
+
+
+async def scrape_reed(query: str, location: str, limit: int = 0) -> List[Job]:
+    """Search Reed.co.uk via their official Jobseeker API.
+    Uses Basic Auth with the API key as username and blank password.
+    Returns jobs with descriptions already included (no browser needed!).
+    """
+    keys = _get_api_keys()
+    api_key = keys["reed_api_key"]
+    if not api_key:
+        logger.info("Reed API key not configured (set REED_API_KEY env var)")
+        return []
+
+    jobs = []
+    max_results = min(limit, 100) if limit > 0 else 100  # API max is 100
+    
+    url = "https://www.reed.co.uk/api/1.0/search"
+    params = {
+        "keywords": query,
+        "locationName": location,
+        "resultsToTake": max_results,
+    }
+    
+    auth = httpx.BasicAuth(username=api_key, password="")
+    
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params, auth=auth)
+            resp.raise_for_status()
+            data = resp.json()
+            
+        results = data.get("results", [])
+        if not results:
+            logger.info(f"Reed: no results for '{query}' in {location}")
+            return []
+        
+        logger.info(f"Reed API returned {len(results)} jobs for '{query}'")
+        
+        for item in results:
+            try:
+                title = (item.get("jobTitle") or "").strip()
+                company = (item.get("employerName") or "").strip()
+                description = (item.get("jobDescription") or "").strip()
+                url = (item.get("jobUrl") or "").strip()
+                location_name = (item.get("locationName") or "").strip()
+                
+                if title:
+                    jobs.append(Job(
+                        title=title,
+                        company=company or "Unknown",
+                        url=url,
+                        platform=Platform.REED,
+                        location=location_name,
+                        description=description[:3000],  # Description comes free with API!
+                    ))
+            except Exception as e:
+                logger.warning(f"Error parsing Reed item: {e}")
+                
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Reed API HTTP error: {e}")
+    except Exception as e:
+        logger.error(f"Reed API request failed: {e}")
+    
+    return jobs
+
+
+async def scrape_adzuna(query: str, location: str, limit: int = 0) -> List[Job]:
+    """Search Adzuna via their official Jobs API.
+    Uses app_id + app_key as query parameters.
+    Returns jobs with descriptions already included (no browser needed!).
+    """
+    keys = _get_api_keys()
+    app_id = keys["adzuna_app_id"]
+    app_key = keys["adzuna_app_key"]
+    country = keys.get("adzuna_country", "gb")
+    
+    if not app_id or not app_key:
+        logger.info("Adzuna API keys not configured (set ADZUNA_APP_ID + ADZUNA_APP_KEY env vars)")
+        return []
+
+    jobs = []
+    results_per_page = min(limit, 50) if limit > 0 else 50  # Keep reasonable
+    
+    # Adzuna supports multiple countries: gb, us, ca, au, de, fr, nl, za, in, br, pl, se, at
+    url = f"https://api.adzuna.com/v1/api/jobs/{country}/search/1"
+    params = {
+        "app_id": app_id,
+        "app_key": app_key,
+        "what": query,
+        "where": location,
+        "results_per_page": results_per_page,
+        "content-type": "application/json",
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            
+        results = data.get("results", [])
+        if not results:
+            logger.info(f"Adzuna: no results for '{query}' in {location} ({country})")
+            return []
+        
+        logger.info(f"Adzuna API returned {len(results)} jobs for '{query}'")
+        
+        for item in results:
+            try:
+                title = (item.get("title") or "").strip()
+                company = ""
+                company_data = item.get("company", {})
+                if isinstance(company_data, dict):
+                    company = (company_data.get("display_name") or "").strip()
+                elif isinstance(company_data, str):
+                    company = company_data
+                
+                description = (item.get("description") or "").strip()
+                url = (item.get("redirect_url") or "").strip()
+                
+                location_name = ""
+                location_data = item.get("location", {})
+                if isinstance(location_data, dict):
+                    location_name = (location_data.get("display_name") or "").strip()
+                
+                if title:
+                    jobs.append(Job(
+                        title=title,
+                        company=company or "Unknown",
+                        url=url,
+                        platform=Platform.ADZUNA,
+                        location=location_name,
+                        description=description[:3000],  # Description included!
+                    ))
+            except Exception as e:
+                logger.warning(f"Error parsing Adzuna item: {e}")
+                
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Adzuna API HTTP error: {e}")
+    except Exception as e:
+        logger.error(f"Adzuna API request failed: {e}")
+    
+    return jobs

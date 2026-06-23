@@ -14,6 +14,8 @@ class Platform(Enum):
     INDEED = "indeed"
     GLASSDOOR = "glassdoor"
     MONSTER = "monster"
+    REED = "reed"
+    ADZUNA = "adzuna"
     UNKNOWN = "unknown"
 
 
