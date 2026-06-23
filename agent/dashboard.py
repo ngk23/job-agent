@@ -166,6 +166,10 @@ def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = N
     # Pass the user ID so the tracker saves per-user files
     if user_id:
         env["USER_ID"] = str(user_id)
+        # Set RESUME_PATH so the agent subprocess can find the uploaded CV
+        resume_candidate = Path(_dashboard_data_dir) / "logs" / f"resume_{user_id}.pdf"
+        if resume_candidate.exists():
+            env["RESUME_PATH"] = str(resume_candidate)
 
     cmd = [sys.executable, "-m", "agent", "run", "--headless"]
 
