@@ -35,40 +35,48 @@ class Selectors:
     LINKEDIN_LINK = ["a.base-card__full-link", "a[data-job-id]", "a[href*='/jobs/view']"]
     
     # Indeed
-    INDEED_CARDS = [".job_seen_beacon", ".jobsearch-ResultsList > li", "[data-jk]", ".job-card"]
-    INDEED_TITLE = ["h2.jobTitle span", ".jobTitle", "h2"]
-    INDEED_COMPANY = ["[data-testid='company-name']", ".companyName", ".company"]
-    INDEED_LINK = ["a[id^='job_']", "a[href*='/pagead/']"]
+    INDEED_CARDS = ["[data-jk]", ".card", "[class*='card']", ".job_seen_beacon", "li[class*='job']", "[data-testid*='job']"]
+    INDEED_TITLE = ["h2.jobTitle span", ".jobTitle", "h2", "[class*='title'] span", "span[class*='title']"]
+    INDEED_COMPANY = ["[data-testid='company-name']", "[data-testid*='company']", ".companyName", ".company", "[class*='company']"]
+    INDEED_LINK = ["a[id^='job_']", "a[href*='rc/clk']", "a[href*='/pagead/']", "a[data-jk]", "a[href*='/job/']"]
     
     # Glassdoor
-    GLASSDOOR_CARDS = ["[class*='JobCard']", ".job ListingJobCard", "[data-brandviews='JOB_CARD']"]
-    GLASSDOOR_TITLE = ["[class*='title']", ".jobTitle", "h2 a"]
-    GLASSDOOR_COMPANY = ["[class*='employer']", "[class*='company']"]
-    GLASSDOOR_LINK = ["a[href*='/job/']"]
+    GLASSDOOR_CARDS = ["[data-test*='job']", "[class*='JobCard']", "[data-test='cell-Jobs-url']", "[data-brandviews='JOB_CARD']", "[class*='jobListing']", "[class*='job-card']"]
+    GLASSDOOR_TITLE = ["[data-test='cell-Jobs-title']", "[class*='title'] a", "h2 a", "[class*='jobTitle']"]
+    GLASSDOOR_COMPANY = ["[data-test='employer-short-name']", "[data-test*='employer']", "[class*='employer']", "[class*='company']"]
+    GLASSDOOR_LINK = ["[data-test='cell-Jobs-url'] a", "a[href*='/job/']"]
     
     # Monster
     MONSTER_CARDS = [
         "[data-testid='job-card']",
+        "[data-testid*='job']",
         ".job-card",
-        ".sc-bdVaJa",
         "[class*='JobCard']",
         "section[data-testid='job-results'] > div",
+        "article",
+        "li[class]",
     ]
     MONSTER_TITLE = [
         "[data-testid='job-title']",
+        "[data-testid*='title']",
         "h2 a",
         ".job-title",
         "[class*='title'] a",
+        "h3",
     ]
     MONSTER_COMPANY = [
         "[data-testid='job-company']",
+        "[data-testid*='company']",
         "[class*='company']",
         ".company-name",
+        "[class*='org']",
     ]
     MONSTER_LINK = [
         "h2 a",
         "a[href*='/job/']",
+        "a[href*='/jobs/']",
         "a.card-link",
+        "a[data-testid*='link']",
     ]
 
 
@@ -226,12 +234,17 @@ async def scrape_linkedin(page, query: str, location: str, limit: int = 0) -> Li
 async def scrape_indeed(page, query: str, location: str, limit: int = 0) -> List[Job]:
     """Scrape Indeed job listings via embedded JSON data + DOM fallback."""
     jobs = []
-    url = f"https://www.indeed.com/jobs?q={quote(query.replace(' ', '+'))}&l={quote(location.replace(' ', '+'))}"
+    url = f"https://www.indeed.com/jobs?q={quote(query.replace(' ', '+'))}&l={quote(location.replace(' ', '+'))}&from=searchOnHP"
     logger.info(f"Searching Indeed: {url}")
     
     ok = await safe_goto(page, url)
     if not ok:
-        return jobs
+        # Try alternative Indeed URL format
+        alt_url = f"https://www.indeed.com/jobs?q={quote(query.replace(' ', '+'))}&l={quote(location.replace(' ', '+'))}"
+        logger.info("Indeed primary URL failed, trying fallback...")
+        ok = await safe_goto(page, alt_url)
+        if not ok:
+            return jobs
 
     # Strategy 1: Extract from window.mosaic.providerData JSON
     try:
@@ -320,7 +333,7 @@ async def scrape_indeed(page, query: str, location: str, limit: int = 0) -> List
 async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> List[Job]:
     """Scrape Glassdoor job listings with overlay dismissal + DOM + JSON fallbacks."""
     jobs = []
-    url = f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={quote(query)}&loc={quote(location)}"
+    url = f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={quote(query)}&loc={quote(location)}&srs=RECENT_SEARCHES"
     logger.info(f"Searching Glassdoor: {url}")
     
     ok = await safe_goto(page, url)
@@ -370,6 +383,42 @@ async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> L
         }""")
         if extracted:
             logger.info("Found embedded Glassdoor data, searching for jobs...")
+            # Try to extract job listings from the data
+            try:
+                if isinstance(extracted, dict):
+                    # Walk the dict looking for job arrays
+                    def _find_job_arrays(obj, depth=0):
+                        if depth > 5: return None
+                        if isinstance(obj, list) and len(obj) > 0:
+                            # Check if this looks like a job list
+                            if all(isinstance(x, dict) and (x.get('jobTitle') or x.get('title') or x.get('jobview')) for x in obj[:3]):
+                                return obj
+                        if isinstance(obj, dict):
+                            for v in obj.values():
+                                result = _find_job_arrays(v, depth + 1)
+                                if result: return result
+                        return None
+                    job_array = _find_job_arrays(extracted)
+                    if job_array:
+                        logger.info(f"Found {len(job_array)} jobs in embedded Glassdoor data")
+                        for item in job_array:
+                            title = item.get('jobTitle') or item.get('title') or ''
+                            company = item.get('employer') or item.get('company') or item.get('employerName') or ''
+                            url = item.get('url') or item.get('jobview') or item.get('jobListingUrl') or ''
+                            if title:
+                                if url and not url.startswith('http'):
+                                    url = 'https://www.glassdoor.com' + url
+                                jobs.append(Job(
+                                    title=title.strip() or "Unknown",
+                                    company=company.strip() or "Unknown",
+                                    url=url.strip() or "",
+                                    platform=Platform.GLASSDOOR,
+                                    description="",
+                                ))
+                            if len(jobs) >= (limit if limit > 0 else 100):
+                                break
+            except Exception as je:
+                logger.warning(f"Glassdoor embedded data walk failed: {je}")
     except Exception as e:
         logger.warning(f"Glassdoor JSON extraction failed: {e}")
 
