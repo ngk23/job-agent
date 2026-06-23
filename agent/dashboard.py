@@ -4130,6 +4130,28 @@ async function showHackAnimation(email) {
 
     # ── Admin Routes ──
 
+
+    @app.route('/api/usage-summary')
+    @require_admin
+    def api_usage_summary():
+        """Return today's usage stats for the admin panel."""
+        from .usage_tracker import get_usage_summary, init_usage_table
+        try:
+            init_usage_table()
+            summary = get_usage_summary()
+            return jsonify(summary)
+        except Exception as e:
+            logger.error(f"Failed to get usage summary: {e}")
+            return jsonify({
+                'date': '',
+                'users_today': 0,
+                'max_users': 3,
+                'users_remaining': 3,
+                'max_searches_per_user': 250,
+                'user_details': {},
+                'error': str(e),
+            })
+
     @app.route('/admin')
     @require_admin
     def admin_panel():
@@ -4213,6 +4235,7 @@ async function showHackAnimation(email) {
     <div class="sum-item"><span class="sum-num">{len_users}</span> Registered Users</div>
     <div class="sum-item"><span class="sum-num">{pending_count}</span> Pending ⏳</div>
     <div class="sum-item"><span class="sum-num" id="activeNowCount">-</span> Active Now <span class="pulse online"></span></div>
+    <div class="sum-item" id="usageCard"><span class="sum-num" id="usageToday">-</span> <span id="usageLabel">Daily Usage</span> <span class="pulse" id="usageDetail" style="font-size:0.7em;color:var(--text-dim);">Loading...</span></div>
   <div class="gmail-section" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px;">
     <h3 style="color:var(--accent);margin-bottom:12px;font-size:0.95em;letter-spacing:1px;">@ Email Notifications (Gmail SMTP)</h3>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -4367,6 +4390,44 @@ function escHtml(str) {
   return d.innerHTML;
 }
 </script>
+// Load usage stats
+(function() {
+  fetch('/api/usage-summary')
+    .then(r => r.json())
+    .then(data => {
+      const today = document.getElementById('usageToday');
+      const detail = document.getElementById('usageDetail');
+      const label = document.getElementById('usageLabel');
+      if (!data || data.error) {
+        today.textContent = '!';
+        detail.textContent = 'Error';
+        return;
+      }
+      const users = data.users_today || 0;
+      const maxUsers = data.max_users || 3;
+      const remaining = maxUsers - users;
+      today.textContent = users;
+      label.textContent = 'Users Today /' + maxUsers;
+      detail.textContent = remaining > 0 ? remaining + ' user slots left' : 'FULL - no more users today';
+      detail.style.color = remaining > 0 ? 'var(--primary)' : 'var(--error)';
+      
+      // Show per-user breakdown
+      const details = data.user_details || {};
+      const keys = Object.keys(details);
+      if (keys.length > 0) {
+        let breakdown = '';
+        for (const uid of keys) {
+          breakdown += ' | U' + uid + ': ' + details[uid] + '/' + data.max_searches_per_user;
+        }
+        detail.textContent += breakdown;
+      }
+    })
+    .catch(err => {
+      document.getElementById('usageToday').textContent = '?';
+      document.getElementById('usageDetail').textContent = 'Error: ' + err.message;
+    });
+})();
+
 
 </body></html>"""
         # Build pending section
