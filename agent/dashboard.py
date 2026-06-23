@@ -219,6 +219,7 @@ def _agent_status():
 
 # ── Dashboard App
 # FIXED_GROQ_BUGS ─────────────────────────────────────────────────────────────
+# USAGE_CHECK_SAFE
 
 def create_dashboard_app(config: AppConfig):
     """Create and configure the GUI Flask app."""
@@ -3818,21 +3819,26 @@ async function showHackAnimation(email) {
         if _run_thread and _run_thread.is_alive():
             return jsonify({'error': 'Agent is already running'}), 409
 
-        # Check daily usage limits before starting
-        init_usage_table()
+        # Capture user_id BEFORE usage check (avoid NameError if DB fails)
         current_user_id = get_user_id()
-        if current_user_id:
-            usage_check = can_run_search(current_user_id)
-            if not usage_check.get('allowed', False):
-                reason = usage_check.get('reason', 'Daily limit reached')
-                logger.warning(f"User {current_user_id} blocked by usage limits: {reason}")
-                return jsonify({
-                    'status': 'error',
-                    'error': reason,
-                    'usage_blocked': True,
-                    'usage_info': usage_check,
-                }), 429
-            increment_search_count(current_user_id)
+
+        # Check daily usage limits before starting
+        try:
+            init_usage_table()
+            if current_user_id:
+                usage_check = can_run_search(current_user_id)
+                if not usage_check.get('allowed', False):
+                    reason = usage_check.get('reason', 'Daily limit reached')
+                    logger.warning(f"User {current_user_id} blocked by usage limits: {reason}")
+                    return jsonify({
+                        'status': 'error',
+                        'error': reason,
+                        'usage_blocked': True,
+                        'usage_info': usage_check,
+                    }), 429
+                increment_search_count(current_user_id)
+        except Exception as e:
+            logger.error(f"Usage check failed (allowing run): {e}")
 
         # Reset state
         _output_queue = queue.Queue()
@@ -3841,9 +3847,6 @@ async function showHackAnimation(email) {
 
         project_root = Path(__file__).resolve().parent.parent
         work_dir = str(project_root)
-
-        # Capture user_id in request context BEFORE spawning thread
-        current_user_id = get_user_id()
 
         def generate():
             global _run_complete, _stop_requested
