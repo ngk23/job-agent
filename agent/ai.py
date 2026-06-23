@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Dict, Any, List, Optional
 
-from openai import RateLimitError
+from openai import RateLimitError, NotFoundError, APIConnectionError, APITimeoutError
 
 from .models import AIResult, Job
 from .config import AppConfig
@@ -25,7 +25,7 @@ class AIClient:
     FREE_MODELS = [
         "meta-llama/llama-3.3-70b-instruct:free",  # Best overall quality
         "qwen/qwen3-coder:free",                     # Strong alternative, less contended
-        "deepseek/deepseek-v4-flash:free",           # Fast, excellent for JSON/structured output
+        "google/gemma-4-31b-it:free",                # Good fallback, rarely congested
     ]
 
     def __init__(self, config: AppConfig):
@@ -69,21 +69,27 @@ class AIClient:
                 # Success! Reset model index back to primary for next call
                 self._current_model_idx = 0
                 return response.choices[0].message.content.strip()
-            except RateLimitError as e:
-                # Rotate to next model (each has its own rate limit bucket)
+            except (RateLimitError, NotFoundError, APIConnectionError, APITimeoutError) as e:
+                # Recoverable error: rotate to next model and retry.
+                # Each model has its own rate limit bucket and availability.
                 self._current_model_idx = (self._current_model_idx + 1) % len(self.FREE_MODELS)
                 next_model = self.FREE_MODELS[self._current_model_idx]
-                logger.warning(
-                    f"Rate limited (429) on {model} — switching to {next_model}"
-                )
+                
+                if isinstance(e, NotFoundError):
+                    logger.warning(f"Model {model} unavailable (404) — permanently skipping, switching to {next_model}")
+                elif isinstance(e, RateLimitError):
+                    logger.warning(f"Rate limited (429) on {model} — switching to {next_model}")
+                else:
+                    logger.warning(f"Connection error on {model}: {e} — switching to {next_model}")
+                
                 # After trying ALL models once, add backoff before cycling again
                 if attempt >= len(self.FREE_MODELS):
                     delay = base_delay * (2 ** (attempt - len(self.FREE_MODELS)))
                     logger.warning(f"All models exhausted, backing off {delay:.0f}s before retry...")
                     time.sleep(delay)
             except Exception as e:
-                # Non-rate-limit errors: don't retry, just log and re-raise
-                logger.error(f"API call failed on {model}: {e}")
+                # Non-recoverable errors (auth, bad request, etc.): crash immediately
+                logger.error(f"Fatal API error on {model}: {e}")
                 raise
         
         logger.error(f"Rate limit exceeded after {max_retries} attempts across all free models")
