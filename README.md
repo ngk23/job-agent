@@ -8,6 +8,8 @@ pinned: false
 license: mit
 ---
 
+> 🟢 **ACTIVE SPACE** — [gouklkrishan-job-agent.hf.space](https://gouklkrishan-job-agent.hf.space)
+
 # Job Agent — AI Job Search & CV Generator
 
 An AI-powered agent that searches **LinkedIn, Indeed, Glassdoor, and Monster** — scores each job with **Claude AI** — generates tailored CVs — and exports everything.
