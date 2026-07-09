@@ -29,9 +29,8 @@ OPENROUTER_RATE_LIMIT_DELAY = 12.0  # seconds between requests for OpenRouter
 
 # Groq free models (all active as of mid-2026, 30 req/min shared pool)
 GROQ_MODELS = [
-    "llama3-70b-8192",  # Best quality on Groq (80k context)
-    "mixtral-8x7b-32768",  # Strong alternative (32k context)
-    "llama3-8b-8192",  # Fast fallback (8k context)
+    "llama-3.3-70b-versatile",  # Best quality on Groq — 70B params, 128k context
+    "llama-3.1-8b-instant",  # Fast fallback — 8B params, 128k context
 ]
 
 # OpenRouter free models (each has its own rate limit bucket)
