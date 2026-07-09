@@ -45,29 +45,29 @@ def _progress_bar(current: int, total: int, width: int = 30, label: str = "") ->
 
 def _print_scoring_header(total: int):
     """Print the scoring phase header."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  PHASE 2: Scoring {total} jobs with AI")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 def _print_cv_header(ranges_with_jobs: dict):
     """Print the CV generation phase header."""
     total_ranges = len(ranges_with_jobs)
     total_jobs = sum(len(v) for v in ranges_with_jobs.values())
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(
         f"  PHASE 3: Generating CVs for {total_ranges} score ranges ({total_jobs} jobs total)"
     )
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 def _print_export_header(results: list):
     """Print the export phase header."""
     total_jobs = sum(count for _, _, count, _ in results)
     total_files = len(results) * 2  # Word + PDF per range
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  PHASE 4: Exporting {total_jobs} jobs to {total_files} files")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 # ─── Maximum jobs to score per run ────────────────────────────────────────────
@@ -267,7 +267,7 @@ async def run_agent(config: AppConfig):
 
     tracker = ApplicationTracker(data_dir=config.data_dir)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  Job Agent - Auto-Profile Mode")
     print(
         f"  Resume: {resume_handler.file_name if resume_handler.resume_path else 'None'}"
@@ -275,7 +275,7 @@ async def run_agent(config: AppConfig):
     print(
         f"  Min score: {config.min_score}% | Max jobs: {'Unlimited' if config.max_job_search <= 0 else config.max_job_search}"
     )
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # ── Wipe old data from previous runs ──
     if resume_handler.resume_path and resume_handler.resume_path.exists():
@@ -412,9 +412,9 @@ async def run_agent(config: AppConfig):
             await load_session(context, "linkedin")
 
         # ── Phase 1: Search ──
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"  PHASE 1: Searching job platforms")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         all_jobs = await run_search(profile, context, limit=config.max_job_search)
 
@@ -719,14 +719,14 @@ async def run_agent(config: AppConfig):
 
     # ── Summary ──
     stats = tracker.get_stats()
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  COMPLETE")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  Jobs searched:    {stats['total_jobs_reviewed']}")
     print(f"  Jobs 80%+ match:  {len(scored_jobs)}")
     print(f"  CVs generated:    {len(cv_texts)}")
     print(f"  Avg match score:  {stats['average_match_score']}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     return 0
 

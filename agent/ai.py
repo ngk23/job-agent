@@ -171,7 +171,7 @@ class AIClient:
                         2 ** (attempt % max(len(self.MODELS), 1))
                     )
                     logger.warning(
-                        f"[{self._provider_name}] Connection error on {model}: {e} — retrying in {delay:.1f}s (attempt {attempt+1})"
+                        f"[{self._provider_name}] Connection error on {model}: {e} — retrying in {delay:.1f}s (attempt {attempt + 1})"
                     )
                     time.sleep(delay)
                 elif isinstance(e, NotFoundError):

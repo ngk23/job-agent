@@ -1177,4 +1177,4 @@ class JobApplicationAgent:
         for url in job_urls:
             result = await self.apply_to_job(url, headless=headless)
             self.results.append({"url": url, "result": result})
-            print(f"\n{'='*60}\n")
+            print(f"\n{'=' * 60}\n")

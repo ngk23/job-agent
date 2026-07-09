@@ -4,7 +4,7 @@ Analyzes user feedback patterns and generates insights for agent self-improvemen
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ def get_feedback_patterns(days: int = 30) -> Dict[str, Any]:
     from .database import get_db
 
     conn = get_db()
-    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
     rows = conn.execute(
         """SELECT jf.*, a.matching_skills, a.title, a.company

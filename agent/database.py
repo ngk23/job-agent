@@ -772,11 +772,11 @@ def get_user_activity_stats(user_id: int) -> Dict[str, Any]:
 
 
 def get_active_users_count(minutes: int = 30) -> int:
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     conn = get_db()
     cur = _cursor(conn)
-    cutoff = (datetime.utcnow() - timedelta(minutes=minutes)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
     cur.execute(
         (
             "SELECT COUNT(DISTINCT user_id) as c FROM activity_log WHERE created_at > %s"
@@ -834,7 +834,7 @@ def get_feedback_summary() -> Dict[str, Any]:
 
 def create_password_reset_token(user_id: int) -> Optional[str]:
     import secrets
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     conn = get_db()
     cur = _cursor(conn)
@@ -848,7 +848,7 @@ def create_password_reset_token(user_id: int) -> Optional[str]:
     )
     conn.commit()
     token = secrets.token_urlsafe(32)
-    expires_at = (datetime.utcnow() + timedelta(hours=1)).isoformat()
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     cur.execute(
         (
             "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (%s, %s, %s)"
@@ -862,7 +862,7 @@ def create_password_reset_token(user_id: int) -> Optional[str]:
 
 
 def get_user_by_reset_token(token: str) -> Optional[Dict[str, Any]]:
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     conn = get_db()
     cur = _cursor(conn)
@@ -872,7 +872,7 @@ def get_user_by_reset_token(token: str) -> Optional[Dict[str, Any]]:
             if _use_postgres
             else "SELECT user_id FROM password_reset_tokens WHERE token = ? AND used = 0 AND expires_at > ?"
         ),
-        (token, datetime.utcnow().isoformat()),
+        (token, datetime.now(timezone.utc).isoformat()),
     )
     row = cur.fetchone()
     if not row:
@@ -896,7 +896,7 @@ def use_password_reset_token(token: str) -> bool:
 
 
 def cleanup_expired_tokens():
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     conn = get_db()
     cur = _cursor(conn)
@@ -906,7 +906,7 @@ def cleanup_expired_tokens():
             if _use_postgres
             else "DELETE FROM password_reset_tokens WHERE expires_at < ?"
         ),
-        (datetime.utcnow().isoformat(),),
+        (datetime.now(timezone.utc).isoformat(),),
     )
     conn.commit()
 
@@ -1202,9 +1202,9 @@ def get_saved_applications(user_id: int) -> List[Dict[str, Any]]:
 
 
 def cleanup_old_saved_jobs(days: int = 7):
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
-    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     conn = get_db()
     cur = _cursor(conn)
     cur.execute(
