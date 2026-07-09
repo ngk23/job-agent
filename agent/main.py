@@ -694,7 +694,7 @@ async def export_jobs_only(config: AppConfig):
 
 # ─── Form auto-fill ──────────────────────────────────────────────────────────
 
-async def run_apply(config: AppConfig, job_url: str):
+async def run_apply(config: AppConfig, job_url: str, auto_submit: bool = False):
     """Auto-fill a job application form using AI + Playwright."""
     if not config.openrouter_api_key and not config.ollama_base_url and not config.groq_api_key:
         print("[ERROR] No AI provider configured. Set OLLAMA_BASE_URL, OPENROUTER_API_KEY, or GROQ_API_KEY:")
@@ -714,7 +714,7 @@ async def run_apply(config: AppConfig, job_url: str):
     # Pass the OpenRouter key (or empty for Ollama which doesn't need one)
     api_key = config.openrouter_api_key or "ollama"
     agent = JobApplicationAgent(api_key, form_profile)
-    result = await agent.apply_to_job(job_url, headless=config.headless)
+    result = await agent.apply_to_job(job_url, headless=config.headless, auto_submit=auto_submit)
 
     if "error" in result:
         print(f"\n  [ERROR] {result['error']}")
@@ -781,10 +781,11 @@ def main():
     export_parser.add_argument("--max-jobs", type=int, default=0, help="Max jobs to search per platform (0 = unlimited)")
 
     # Apply command (auto-fill job application form)
-    apply_parser = subparsers.add_parser("apply", help="Auto-fill a job application form using OpenRouter")
+    apply_parser = subparsers.add_parser("apply", help="Auto-fill a job application form using AI + Playwright")
     apply_parser.add_argument("url", help="Job application URL to auto-fill")
     apply_parser.add_argument("--profile", default="profiles/profile.json", help="Path to profile JSON")
     apply_parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
+    apply_parser.add_argument("--auto-submit", action="store_true", help="Click submit without confirmation (use in headless/CI mode)")
 
     # Dashboard
     dash_parser = subparsers.add_parser("dashboard", help="Start the web dashboard")
@@ -836,7 +837,8 @@ def main():
         config.max_job_search = args.max_jobs
         return asyncio.run(export_jobs_only(config))
     elif args.command == "apply":
-        return asyncio.run(run_apply(config, args.url))
+        auto_submit = getattr(args, "auto_submit", False)
+        return asyncio.run(run_apply(config, args.url, auto_submit=auto_submit))
     elif args.command == "dashboard":
         run_dashboard_cmd(config)
         return 0

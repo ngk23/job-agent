@@ -6,6 +6,7 @@ Analyzes job application forms via screenshot vision and fills them automaticall
 import asyncio
 import base64
 import json
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -216,7 +217,7 @@ class FormAnalyzer:
             return ActionType.CLICK, "Button to reveal additional fields"
 
         if field_type == FieldType.SUBMIT:
-            return ActionType.HIGHLIGHT, "Submit button - highlighted for user review"
+            return ActionType.CLICK, "Submit button — will ask for confirmation before clicking"
 
         if field_type in [FieldType.SELECT, FieldType.RADIO, FieldType.CHECKBOX]:
             return ActionType.SELECT, "Selection field"
@@ -367,12 +368,14 @@ class FormAnalyzer:
 class FormFiller:
     """Executes form filling actions using Playwright."""
 
-    def __init__(self, page: Page, analyzer: FormAnalyzer):
+    def __init__(self, page: Page, analyzer: FormAnalyzer, auto_submit: bool = False):
         self.page = page
         self.analyzer = analyzer
+        self.auto_submit = auto_submit  # If True, submit without confirmation (headless/CI mode)
         self.log: List[str] = []
         self.errors: List[str] = []
         self.user_interventions: List[str] = []
+        self._submitted = False  # Track whether form was submitted
 
     async def _fill_text(self, field: FormField) -> bool:
         try:
@@ -461,6 +464,62 @@ class FormFiller:
             self.log.append(f"  [WARN] Could not highlight '{field.label}': {e}")
             return False
 
+    async def _click_submit(self, field: FormField) -> bool:
+        """Click the submit button with a confirmation prompt.
+        Highlights the button, shows a summary of filled fields + errors,
+        then asks user to confirm before clicking.
+        In auto_submit mode, clicks immediately without prompting.
+        """
+        # Highlight the submit button
+        await self._highlight_field(field)
+        await asyncio.sleep(0.5)
+
+        # Show summary before submitting
+        filled_count = sum(1 for entry in self.log if entry.startswith("  [OK]"))
+        error_count = len(self.errors)
+        self.log.append(f"")
+        self.log.append(f"  {'─' * 50}")
+        self.log.append(f"  READY TO SUBMIT")
+        self.log.append(f"  {'─' * 50}")
+        self.log.append(f"  Fields filled: {filled_count}")
+        self.log.append(f"  Errors:        {error_count}")
+        if self.errors:
+            self.log.append(f"  Recent errors:")
+            for err in self.errors[-5:]:
+                self.log.append(f"    - {err}")
+
+        # Confirm submission
+        is_interactive = sys.stdout.isatty() and not self.auto_submit
+        
+        if self.auto_submit or not is_interactive:
+            self.log.append(f"  Auto-submit mode: clicking '{field.label}' without confirmation")
+            print(f"\n  [AUTO-SUBMIT] Clicking '{field.label}'...")
+        else:
+            print(f"\n  {'─' * 50}")
+            print(f"  READY TO SUBMIT")
+            print(f"  {'─' * 50}")
+            print(f"  Fields filled: {filled_count}")
+            if error_count:
+                print(f"  ⚠ Errors: {error_count} — review above")
+            print(f"\n  Press Enter to submit, or type 's' to skip submission...")
+            user_input = input().strip().lower()
+            if user_input == 's':
+                self.log.append(f"  [SKIP] User chose to skip submission")
+                self.user_interventions.append(f"User skipped submission")
+                return False
+
+        # Click the submit button
+        try:
+            await self.page.click(field.selector)
+            self.log.append(f"  [SUBMIT] ✅ Clicked '{field.label}' — application submitted!")
+            self._submitted = True
+            await asyncio.sleep(2)  # Wait for submission response
+            return True
+        except Exception as e:
+            self.errors.append(f"Failed to click submit '{field.label}': {e}")
+            self.log.append(f"  [SUBMIT] ❌ Failed to click '{field.label}': {e}")
+            return False
+
     async def fill_form(self, screenshot_bytes: bytes) -> Dict:
         """Main method: analyze and fill form."""
         # Step 1: Analyze
@@ -498,8 +557,12 @@ class FormFiller:
                 if await self._upload_file(field):
                     success_count += 1
             elif action == ActionType.CLICK:
-                if await self._click_button(field):
-                    success_count += 1
+                if field.field_type == FieldType.SUBMIT:
+                    if await self._click_submit(field):
+                        success_count += 1
+                else:
+                    if await self._click_button(field):
+                        success_count += 1
             elif action == ActionType.REVEAL:
                 if await self._click_button(field):
                     success_count += 1
@@ -537,6 +600,7 @@ class FormFiller:
             "errors": self.errors,
             "user_interventions": self.user_interventions,
             "log": self.log,
+            "submitted": self._submitted,
         }
 
 
@@ -553,9 +617,19 @@ class JobApplicationAgent:
         self.profile = profile
         self.results: List[Dict] = []
 
-    async def apply_to_job(self, job_url: str, headless: bool = False) -> Dict:
-        """Apply to a single job."""
+    async def apply_to_job(self, job_url: str, headless: bool = False, auto_submit: bool = False) -> Dict:
+        """Apply to a single job.
+        
+        Args:
+            job_url: URL of the job application form
+            headless: Run browser in headless mode
+            auto_submit: If True, click submit without confirmation (for CI/headless mode)
+        """
         print(f"\n  [AGENT] Opening job application: {job_url}")
+        if auto_submit:
+            print(f"  [AGENT] Auto-submit mode: will submit without confirmation")
+        elif not headless:
+            print(f"  [AGENT] Interactive mode: you'll be asked to confirm before submission")
 
         from playwright.async_api import async_playwright  # lazy import to avoid top-level dep issues
 
@@ -571,7 +645,7 @@ class JobApplicationAgent:
                 screenshot = await page.screenshot()
 
                 # Fill form
-                filler = FormFiller(page, self.analyzer)
+                filler = FormFiller(page, self.analyzer, auto_submit=auto_submit)
                 result = await filler.fill_form(screenshot)
 
                 # Print results
@@ -582,7 +656,8 @@ class JobApplicationAgent:
                     print("\n  [AGENT] Multi-step form detected. Taking another screenshot...")
                     await asyncio.sleep(2)
                     screenshot2 = await page.screenshot()
-                    result2 = await filler.fill_form(screenshot2)
+                    filler2 = FormFiller(page, self.analyzer, auto_submit=auto_submit)
+                    result2 = await filler2.fill_form(screenshot2)
                     print("\n".join(result2["log"]))
 
                 # Keep browser open for user review
