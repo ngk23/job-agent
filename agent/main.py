@@ -15,6 +15,7 @@ from .scrapers import scrape_linkedin, scrape_indeed, scrape_glassdoor, scrape_m
 from .ai import AIClient
 from .tracker import ApplicationTracker
 from .dashboard import run_dashboard
+from .dashboard_fastapi import run_fastapi_dashboard
 from .feedback_learning import get_feedback_insights_for_prompt
 from .form_filler import JobApplicationAgent, map_profile_to_form_filler
 from .models import Job, Platform, AIResult
@@ -727,8 +728,8 @@ async def run_apply(config: AppConfig, job_url: str, auto_submit: bool = False):
 # ─── Dashboard & stats ─────────────────────────────────────────────────────────
 
 def run_dashboard_cmd(config: AppConfig):
-    """Run the web dashboard."""
-    run_dashboard(config)
+    """Run the web dashboard (FastAPI by default)."""
+    run_fastapi_dashboard(config)
 
 
 def show_stats(config: AppConfig):
