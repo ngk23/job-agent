@@ -1,6 +1,21 @@
 # Docker Compose for Job Agent
 
 services:
+  # PostgreSQL database
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: job_agent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-job_agent}
+      POSTGRES_DB: job_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    profiles:
+      - pg
+      - all
+
   # Run the job agent
   agent:
     build: .
@@ -14,6 +29,7 @@ services:
       - MIN_SCORE=70
       - MAX_APPLICATIONS=10
       - HEADLESS=true
+      - DATABASE_URL=${DATABASE_URL:-}
     profiles:
       - run
   
@@ -27,6 +43,7 @@ services:
     environment:
       - DASHBOARD_HOST=0.0.0.0
       - DASHBOARD_PORT=8080
+      - DATABASE_URL=${DATABASE_URL:-}
     profiles:
       - dashboard
   
@@ -39,3 +56,6 @@ services:
     tty: true
     volumes:
       - .:/app
+
+volumes:
+  pgdata:

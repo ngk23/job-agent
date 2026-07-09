@@ -70,6 +70,9 @@ class AppConfig:
     dashboard_port: int = 8080
     dashboard_host: str = "127.1.1.1"
 
+    # Database
+    database_url: str = ""  # PostgreSQL connection string (empty = use SQLite)
+
     # Data directory for persistent storage (HF Spaces uses /data)
     data_dir: str = "."
 
@@ -95,6 +98,7 @@ class AppConfig:
         self.dashboard_port = int(get_env("DASHBOARD_PORT", str(self.dashboard_port)))
         self.dashboard_host = get_env("DASHBOARD_HOST", self.dashboard_host)
         self.data_dir = get_env("DATA_DIR", self.data_dir)
+        self.database_url = get_env("DATABASE_URL", self.database_url)
         self.word_export_path = get_env("WORD_EXPORT_PATH", self.word_export_path)
         self.auto_keywords = get_env("AUTO_KEYWORDS", "true").lower() != "false" and self.auto_keywords
         self.max_job_search = int(get_env("MAX_JOB_SEARCH", str(self.max_job_search)))
