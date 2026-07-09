@@ -7,8 +7,8 @@ Reuses Gmail credential management from notifier.py.
 import logging
 import os
 import smtplib
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 from .notifier import _get_gmail_credentials
 
@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 APP_URL = os.environ.get("APP_URL", "https://gouklkrishan-job-agent.hf.space")
 
 
-def send_password_reset_email(user_email: str, user_name: str, reset_token: str) -> bool:
+def send_password_reset_email(
+    user_email: str, user_name: str, reset_token: str
+) -> bool:
     """
     Send a password reset email with a secure token link via Gmail SMTP.
 
@@ -76,7 +78,9 @@ def send_password_reset_email(user_email: str, user_name: str, reset_token: str)
         return True
 
     except smtplib.SMTPAuthenticationError:
-        logger.error(f"Gmail SMTP authentication failed for {gmail_user}. Check GMAIL_APP_PASSWORD.")
+        logger.error(
+            f"Gmail SMTP authentication failed for {gmail_user}. Check GMAIL_APP_PASSWORD."
+        )
         return False
     except Exception as e:
         logger.error(f"Failed to send password reset email to {user_email}: {e}")

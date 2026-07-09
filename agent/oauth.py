@@ -5,7 +5,7 @@ Uses Authlib to provide Google Sign-In functionality.
 
 import logging
 import os
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from authlib.integrations.flask_client import OAuth
 from flask import session, url_for
@@ -31,7 +31,9 @@ def init_oauth(app) -> Optional[OAuth]:
     _oauth_initialized = True
 
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        logger.info("Google OAuth not configured — set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars")
+        logger.info(
+            "Google OAuth not configured — set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars"
+        )
         _oauth = None
         return None
 

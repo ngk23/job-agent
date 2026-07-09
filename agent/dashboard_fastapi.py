@@ -6,7 +6,6 @@ Run Agent button, real-time streaming output, results display, and admin panel.
 
 import hashlib
 import json
-import httpx
 import logging
 import os
 import queue
@@ -16,51 +15,106 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse, FileResponse, Response
-from starlette.middleware.sessions import SessionMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
+import httpx
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from jinja2 import Template
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 
-from .config import AppConfig
-from .tracker import ApplicationTracker
-from .utils import _ensure_dirs
 from .auth import (
-    ensure_admin_exists,
-    hash_password,
     DEFAULT_ADMIN_EMAIL,
     DEFAULT_ADMIN_PASSWORD,
-)
-from .auth_fastapi import (
-    login_user_fastapi,
-    logout_user_fastapi,
-    get_current_user_fastapi,
-    is_admin_fastapi,
-    get_user_id_fastapi,
+    ensure_admin_exists,
+    hash_password,
 )
 from .auth import register_user as register_user_fn
-from .notifier import notify_approved, notify_rejected, set_gmail_credentials, _get_gmail_credentials
+from .auth_fastapi import (
+    get_current_user_fastapi,
+    get_user_id_fastapi,
+    is_admin_fastapi,
+    login_user_fastapi,
+    logout_user_fastapi,
+)
+from .config import AppConfig
+from .database import (
+    _cursor,
+    approve_user,
+    cleanup_expired_tokens,
+    cleanup_old_saved_jobs,
+    clear_all_applications,
+    clear_user_applications,
+    create_password_reset_token,
+    delete_user,
+    get_active_users_count,
+    get_all_applications,
+    get_all_recent_activity,
+    get_all_users,
+    get_applied_urls,
+    get_db,
+    get_feedback_summary,
+    get_login_logs,
+    get_pending_users,
+    get_saved_application_ids,
+    get_saved_applications,
+    get_stats,
+    get_user_activity_stats,
+    get_user_applications,
+)
+from .database import get_user_by_email as db_get_user_by_email
+from .database import (
+    get_user_by_id,
+    get_user_by_reset_token,
+    init_db,
+    log_activity,
+    log_login_attempt,
+)
+from .database import mark_applied as db_mark_applied
+from .database import (
+    mark_password_changed,
+    mark_password_needs_change,
+    needs_password_change,
+    reject_user,
+    save_application,
+    save_feedback,
+)
+from .database import save_job as db_save_job
+from .database import (
+    save_job_with_data,
+)
+from .database import unsave_job as db_unsave_job
+from .database import (
+    update_gmail_credentials,
+    update_user_password,
+    update_user_resend_key,
+    update_user_role,
+    use_password_reset_token,
+)
 from .email_utils import send_password_reset_email
 from .feedback_learning import get_feedback_insights_short
-from .database import (
-    init_db, get_db, _cursor, get_user_applications, get_all_applications, get_applied_urls,
-    mark_applied as db_mark_applied, save_job as db_save_job, unsave_job as db_unsave_job,
-    get_saved_application_ids, get_all_users, get_pending_users,
-    approve_user, reject_user, get_stats,
-    clear_user_applications, clear_all_applications, save_application, save_job_with_data,
-    get_saved_applications, cleanup_old_saved_jobs, update_user_role, delete_user,
-    get_user_by_email as db_get_user_by_email, get_user_by_id, update_user_password,
-    create_password_reset_token, get_user_by_reset_token, use_password_reset_token,
-    cleanup_expired_tokens, log_login_attempt, get_login_logs,
-    mark_password_changed, mark_password_needs_change, needs_password_change,
-    log_activity, get_all_recent_activity, get_active_users_count, get_user_activity_stats,
-    save_feedback, get_feedback_summary, update_user_resend_key, update_gmail_credentials,
+from .notifier import (
+    _get_gmail_credentials,
+    notify_approved,
+    notify_rejected,
+    set_gmail_credentials,
 )
+from .tracker import ApplicationTracker
+from .utils import _ensure_dirs
 
 logger = logging.getLogger(__name__)
 
 # ── Import HTML templates from shared module ──────────────────────────────────
-from .templates_fastapi import LOGIN_HTML as _LOGIN_HTML, SIGNUP_HTML as _SIGNUP_HTML, GUI_HTML as _GUI_HTML
+from .templates_fastapi import GUI_HTML as _GUI_HTML
+from .templates_fastapi import LOGIN_HTML as _LOGIN_HTML
+from .templates_fastapi import SIGNUP_HTML as _SIGNUP_HTML
+
 _init_persistent_data = lambda c: None  # HF Spaces data init (placeholder)
 
 # ── Background runner ─────────────────────────────────────────────────────────
@@ -78,6 +132,7 @@ _selected_region: str = "Remote"
 def _applied_path():
     return Path(_dashboard_data_dir) / "logs" / "applied.json"
 
+
 def _load_applied() -> set:
     path = _applied_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,10 +144,12 @@ def _load_applied() -> set:
     except (json.JSONDecodeError, IOError):
         return set()
 
+
 def _save_applied(applied: set):
     path = _applied_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(sorted(applied), indent=2))
+
 
 def _mark_applied(job_url: str) -> bool:
     applied = _load_applied()
@@ -135,7 +192,15 @@ def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = N
     _output_queue.put("[SYSTEM] Initializing Job Agent...\n")
     _output_queue.put("[SYSTEM] Launching browser, searching job platforms...\n\n")
     try:
-        process = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
         _run_process = process
         for line in iter(process.stdout.readline, ""):
             if _output_queue is not None:
@@ -143,7 +208,9 @@ def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = N
         process.wait()
         _run_returncode = process.returncode
         if not _stop_requested:
-            _output_queue.put(f"\n[SYSTEM] Agent finished with exit code {process.returncode}\n")
+            _output_queue.put(
+                f"\n[SYSTEM] Agent finished with exit code {process.returncode}\n"
+            )
         _run_complete = True
     except Exception as e:
         if _output_queue is not None:
@@ -152,13 +219,18 @@ def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = N
 
 
 def _agent_status():
-    return {"running": _run_thread is not None and _run_thread.is_alive(), "complete": _run_complete, "returncode": _run_returncode}
+    return {
+        "running": _run_thread is not None and _run_thread.is_alive(),
+        "complete": _run_complete,
+        "returncode": _run_returncode,
+    }
 
 
 # ── Template Helpers ─────────────────────────────────────────────────────────
 
 # ── Template cache ───────────────────────────────────────────────────────────
 _template_cache = {}
+
 
 def _render_template(html_str: str, **kwargs) -> str:
     """Render a Jinja2 template string with context. Results are cached."""
@@ -291,16 +363,23 @@ body{font-family:'Share Tech Mono',monospace;background:var(--bg);color:var(--te
 
 # ── Create FastAPI App ────────────────────────────────────────────────────────
 
+
 def create_fastapi_app(config: AppConfig) -> FastAPI:
     """Create and configure the FastAPI dashboard app."""
     app = FastAPI(title="Job Agent", version="2.0.0")
 
     # Session middleware (cookie-based, same as Flask)
-    stable_secret = os.environ.get('DASHBOARD_SECRET_KEY', '')
+    stable_secret = os.environ.get("DASHBOARD_SECRET_KEY", "")
     if not stable_secret:
         stable_secret = hashlib.sha256(str(config.__dict__).encode()).hexdigest()[:32]
-    app.add_middleware(SessionMiddleware, secret_key=stable_secret, session_cookie="jobagent_session",
-                       max_age=86400, same_site="lax", https_only=config.is_hf_space)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=stable_secret,
+        session_cookie="jobagent_session",
+        max_age=86400,
+        same_site="lax",
+        https_only=config.is_hf_space,
+    )
 
     # Trust proxy headers for HF Spaces
     class ProxyHeadersMiddleware(BaseHTTPMiddleware):
@@ -308,6 +387,7 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
             if request.headers.get("x-forwarded-proto"):
                 request.scope["scheme"] = request.headers["x-forwarded-proto"]
             return await call_next(request)
+
     app.add_middleware(ProxyHeadersMiddleware)
 
     global _dashboard_data_dir
@@ -321,8 +401,14 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
     cleanup_old_saved_jobs(days=7)
     try:
         admin_user = db_get_user_by_email(DEFAULT_ADMIN_EMAIL)
-        if admin_user and admin_user.get("gmail_user") and admin_user.get("gmail_app_password"):
-            set_gmail_credentials(admin_user["gmail_user"], admin_user["gmail_app_password"])
+        if (
+            admin_user
+            and admin_user.get("gmail_user")
+            and admin_user.get("gmail_app_password")
+        ):
+            set_gmail_credentials(
+                admin_user["gmail_user"], admin_user["gmail_app_password"]
+            )
     except Exception as e:
         logger.warning("Could not load Gmail credentials: %s", e)
 
@@ -337,7 +423,8 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
 
     def _admin_guard(request: Request) -> Optional[JSONResponse]:
         err = _auth_guard(request)
-        if err: return err
+        if err:
+            return err
         if request.session.get("user_role") != "admin":
             return JSONResponse({"error": "Admin required"}, 403)
         return None
@@ -356,7 +443,11 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         pending_msg = ""
         if request.query_params.get("error") == "pending":
             pending_msg = '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(255,170,0,0.1);border:1px solid rgba(255,170,0,0.3);border-radius:8px;color:#ffaa00;font-size:0.85em">Your account is pending admin approval.</div>'
-        html = _LOGIN_HTML.replace("{pending_msg}", pending_msg) if _LOGIN_HTML else "LOGIN_HTML not loaded"
+        html = (
+            _LOGIN_HTML.replace("{pending_msg}", pending_msg)
+            if _LOGIN_HTML
+            else "LOGIN_HTML not loaded"
+        )
         return HTMLResponse(html)
 
     @app.post("/login")
@@ -367,24 +458,45 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         email = data.get("email", "").strip().lower()
         password = data.get("password", "")
         if not email or not password:
-            return JSONResponse({"status": "error", "error": "Email and password required"}, 400)
+            return JSONResponse(
+                {"status": "error", "error": "Email and password required"}, 400
+            )
         result = login_user_fastapi(request, email, password)
         if isinstance(result, dict) and result.get("error"):
             code = 403 if result["error"] == "pending" else 403
-            log_login_attempt(email=email, success=False, details=result["error"],
-                              ip_address=request.client.host if request.client else "",
-                              user_agent=request.headers.get("user-agent", ""))
-            return JSONResponse({"status": "error", "error": result.get("message", result["error"])}, code)
+            log_login_attempt(
+                email=email,
+                success=False,
+                details=result["error"],
+                ip_address=request.client.host if request.client else "",
+                user_agent=request.headers.get("user-agent", ""),
+            )
+            return JSONResponse(
+                {"status": "error", "error": result.get("message", result["error"])},
+                code,
+            )
         if not result:
-            return JSONResponse({"status": "error", "error": "Invalid email or password"}, 401)
-        log_login_attempt(email=email, success=True, user_id=result.get("id"),
-                          ip_address=request.client.host if request.client else "",
-                          user_agent=request.headers.get("user-agent", ""))
+            return JSONResponse(
+                {"status": "error", "error": "Invalid email or password"}, 401
+            )
+        log_login_attempt(
+            email=email,
+            success=True,
+            user_id=result.get("id"),
+            ip_address=request.client.host if request.client else "",
+            user_agent=request.headers.get("user-agent", ""),
+        )
         uid = result.get("id")
         if uid:
-            log_activity(uid, email, "login", details=f"User {result['name']} logged in")
+            log_activity(
+                uid, email, "login", details=f"User {result['name']} logged in"
+            )
         must_change = needs_password_change(uid) if uid else False
-        return {"status": "ok", "user": {"name": result["name"], "email": result["email"]}, "must_change_password": must_change}
+        return {
+            "status": "ok",
+            "user": {"name": result["name"], "email": result["email"]},
+            "must_change_password": must_change,
+        }
 
     # ── Signup ──
     @app.get("/signup")
@@ -400,13 +512,23 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         email = data.get("email", "").strip().lower()
         password = data.get("password", "")
         if not name or not email or not password:
-            return JSONResponse({"status": "error", "error": "All fields required"}, 400)
+            return JSONResponse(
+                {"status": "error", "error": "All fields required"}, 400
+            )
         if len(password) < 6:
-            return JSONResponse({"status": "error", "error": "Password must be at least 6 characters"}, 400)
+            return JSONResponse(
+                {"status": "error", "error": "Password must be at least 6 characters"},
+                400,
+            )
         user = register_user_fn(email, password, name)
         if not user:
-            return JSONResponse({"status": "error", "error": "Email already registered"}, 409)
-        return {"status": "pending_approval", "message": "Account created! Please wait for admin approval."}
+            return JSONResponse(
+                {"status": "error", "error": "Email already registered"}, 409
+            )
+        return {
+            "status": "pending_approval",
+            "message": "Account created! Please wait for admin approval.",
+        }
 
     # ── Logout ──
     @app.post("/logout")
@@ -444,13 +566,22 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         current = data.get("current_password", "")
         new_pw = data.get("new_password", "")
         if len(new_pw) < 6:
-            return JSONResponse({"status": "error", "error": "New password must be at least 6 characters"}, 400)
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "error": "New password must be at least 6 characters",
+                },
+                400,
+            )
         user = get_user_by_id(user_id)
         if not user:
             return JSONResponse({"status": "error", "error": "User not found"}, 404)
         from .auth import verify_password
+
         if not verify_password(current, user["password_hash"]):
-            return JSONResponse({"status": "error", "error": "Current password is incorrect"}, 401)
+            return JSONResponse(
+                {"status": "error", "error": "Current password is incorrect"}, 401
+            )
         new_hash = hash_password(new_pw)
         update_user_password(user_id, new_hash)
         mark_password_changed(user_id)
@@ -467,7 +598,10 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         email = data.get("email", "").strip().lower()
         user = db_get_user_by_email(email)
         if not user:
-            return {"status": "ok", "message": "If that email exists, a reset link has been sent."}
+            return {
+                "status": "ok",
+                "message": "If that email exists, a reset link has been sent.",
+            }
         token = create_password_reset_token(user["id"])
         try:
             sent = send_password_reset_email(email, token)
@@ -475,14 +609,20 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
             sent = False
         if sent:
             return {"status": "ok", "message": "Reset link sent! Check your email."}
-        return {"status": "ok", "message": f"Reset token (email not configured): {token}"}
+        return {
+            "status": "ok",
+            "message": f"Reset token (email not configured): {token}",
+        }
 
     # ── Reset Password ──
     @app.get("/reset-password/{token}")
     async def reset_password_get(token: str):
         user = get_user_by_reset_token(token)
         if not user:
-            html = RESET_PW_HTML.replace("{{ msg|safe }}", '<div class="msg error" style="display:block">Invalid or expired reset token.</div>')
+            html = RESET_PW_HTML.replace(
+                "{{ msg|safe }}",
+                '<div class="msg error" style="display:block">Invalid or expired reset token.</div>',
+            )
             return HTMLResponse(html)
         html = RESET_PW_HTML.replace("{{ msg|safe }}", "")
         return HTMLResponse(html)
@@ -492,15 +632,22 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         data = await request.json()
         new_pw = data.get("password", "")
         if len(new_pw) < 6:
-            return JSONResponse({"status": "error", "error": "Password must be at least 6 characters"}, 400)
+            return JSONResponse(
+                {"status": "error", "error": "Password must be at least 6 characters"},
+                400,
+            )
         user = get_user_by_reset_token(token)
         if not user:
-            return JSONResponse({"status": "error", "error": "Invalid or expired reset token."}, 400)
+            return JSONResponse(
+                {"status": "error", "error": "Invalid or expired reset token."}, 400
+            )
         new_hash = hash_password(new_pw)
         # Update directly via database module and verify the change took effect
         conn = get_db()
         cur = _cursor(conn)
-        cur.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["id"]))
+        cur.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["id"])
+        )
         conn.commit()
         # Verify the update actually persisted
         cur.execute("SELECT password_hash FROM users WHERE id = ?", (user["id"],))
@@ -508,16 +655,22 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         if actual and actual["password_hash"] == new_hash:
             use_password_reset_token(token)
             return {"status": "ok", "message": "Password reset! You can now log in."}
-        return JSONResponse({"status": "error", "error": "Failed to update password"}, 500)
+        return JSONResponse(
+            {"status": "error", "error": "Failed to update password"}, 500
+        )
 
     # ── Upload CV ──
     @app.post("/upload")
     async def upload_cv(request: Request, file: UploadFile = File(...)):
         user_id = request.session.get("user_id")
         if not user_id:
-            return JSONResponse({"status": "error", "error": "Authentication required"}, 401)
+            return JSONResponse(
+                {"status": "error", "error": "Authentication required"}, 401
+            )
         if not file.filename or not file.filename.endswith(".pdf"):
-            return JSONResponse({"status": "error", "error": "Only PDF files are supported"}, 400)
+            return JSONResponse(
+                {"status": "error", "error": "Only PDF files are supported"}, 400
+            )
         global _uploaded_filename
         _uploaded_filename = file.filename
         save_path = Path(_dashboard_data_dir) / "logs" / f"resume_{user_id}.pdf"
@@ -576,8 +729,11 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
                     yield ": heartbeat\n\n"
             yield "data: [DONE]\n\n"
 
-        return StreamingResponse(event_stream(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # ── Status ──
     @app.get("/status")
@@ -591,8 +747,13 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         if not user_id:
             return {"files": [], "stats": {}}
         from .utils import _ensure_dirs
+
         output_dir = Path(_dashboard_data_dir)
-        files = [f.name for f in sorted(output_dir.glob("jobs_*.docx")) + sorted(output_dir.glob("cv_*.pdf"))]
+        files = [
+            f.name
+            for f in sorted(output_dir.glob("jobs_*.docx"))
+            + sorted(output_dir.glob("cv_*.pdf"))
+        ]
         files = files[-8:]  # Last 8 files
         stats = get_stats(user_id)
         return {"files": files, "stats": stats}
@@ -688,8 +849,13 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         if not user_id:
             return JSONResponse({"error": "Auth required"}, 401)
         data = await request.json()
-        save_feedback(user_id, data.get("application_id", 0), data.get("rating", 0),
-                      data.get("title", ""), data.get("company", ""))
+        save_feedback(
+            user_id,
+            data.get("application_id", 0),
+            data.get("rating", 0),
+            data.get("title", ""),
+            data.get("company", ""),
+        )
         return {"status": "ok"}
 
     @app.get("/api/user-feedback")
@@ -698,6 +864,7 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         if not user_id:
             return JSONResponse({"error": "Auth required"}, 401)
         from .database import get_user_feedback
+
         try:
             fb = get_user_feedback(user_id)
             return {"feedback": fb if fb else []}
@@ -710,13 +877,20 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         if not user_id:
             return JSONResponse({"error": "Auth required"}, 401)
         summary = get_feedback_summary()
-        return {"total": summary.get("total", 0), "thumbs_up": summary.get("up", 0),
-                "thumbs_down": summary.get("down", 0), "positivity_rate": summary.get("rate", 0)}
+        return {
+            "total": summary.get("total", 0),
+            "thumbs_up": summary.get("up", 0),
+            "thumbs_down": summary.get("down", 0),
+            "positivity_rate": summary.get("rate", 0),
+        }
 
     # ── Admin Panel ──
     @app.get("/admin")
     async def admin_panel(request: Request):
-        if not request.session.get("user_id") or request.session.get("user_role") != "admin":
+        if (
+            not request.session.get("user_id")
+            or request.session.get("user_role") != "admin"
+        ):
             return RedirectResponse(url="/login", status_code=302)
         pending = get_pending_users()
         all_users = get_all_users()
@@ -728,41 +902,54 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         }
         msg = request.query_params.get("msg", "")
         msg_type = request.query_params.get("type", "")
-        return HTMLResponse(_render_template(ADMIN_HTML, stats=stats_data, pending_users=pending,
-                                              all_users=all_users, msg=msg, msg_type=msg_type))
+        return HTMLResponse(
+            _render_template(
+                ADMIN_HTML,
+                stats=stats_data,
+                pending_users=pending,
+                all_users=all_users,
+                msg=msg,
+                msg_type=msg_type,
+            )
+        )
 
     @app.post("/admin/approve/{uid}")
     async def admin_approve(uid: int, request: Request):
         err = _admin_guard(request)
-        if err: return err
+        if err:
+            return err
         approve_user(uid)
         return {"status": "ok"}
 
     @app.post("/admin/reject/{uid}")
     async def admin_reject(uid: int, request: Request):
         err = _admin_guard(request)
-        if err: return err
+        if err:
+            return err
         reject_user(uid)
         return {"status": "ok"}
 
     @app.post("/admin/make-admin/{uid}")
     async def admin_make_admin(uid: int, request: Request):
         err = _admin_guard(request)
-        if err: return err
+        if err:
+            return err
         update_user_role(uid, "admin")
         return {"status": "ok"}
 
     @app.post("/admin/delete/{uid}")
     async def admin_delete_user(uid: int, request: Request):
         err = _admin_guard(request)
-        if err: return err
+        if err:
+            return err
         delete_user(uid)
         return {"status": "ok"}
 
     @app.post("/admin/gmail")
     async def admin_gmail(request: Request):
         err = _admin_guard(request)
-        if err: return err
+        if err:
+            return err
         data = await request.json()
         user = data.get("gmail_user", "")
         pw = data.get("gmail_app_password", "")
@@ -775,16 +962,23 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
     async def google_login(request: Request):
         google_client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
         if not google_client_id:
-            return RedirectResponse(url="/login?error=google_not_configured", status_code=302)
+            return RedirectResponse(
+                url="/login?error=google_not_configured", status_code=302
+            )
         redirect_uri = str(request.url_for("google_callback"))
         # Make redirect_uri absolute
         if redirect_uri.startswith("/"):
             scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-            host = request.headers.get("x-forwarded-host", request.url.netloc.split(":")[0] if request.url.netloc else "localhost")
+            host = request.headers.get(
+                "x-forwarded-host",
+                request.url.netloc.split(":")[0] if request.url.netloc else "localhost",
+            )
             redirect_uri = f"{scheme}://{host}{redirect_uri}"
-        auth_url = (f"https://accounts.google.com/o/oauth2/v2/auth?"
-                     f"client_id={google_client_id}&redirect_uri={redirect_uri}"
-                     f"&response_type=code&scope=openid+email+profile")
+        auth_url = (
+            f"https://accounts.google.com/o/oauth2/v2/auth?"
+            f"client_id={google_client_id}&redirect_uri={redirect_uri}"
+            f"&response_type=code&scope=openid+email+profile"
+        )
         return RedirectResponse(url=auth_url, status_code=302)
 
     @app.get("/login/google/callback")
@@ -795,24 +989,39 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         google_client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
         google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
         if not google_client_id or not google_client_secret:
-            return RedirectResponse(url="/login?error=google_not_configured", status_code=302)
+            return RedirectResponse(
+                url="/login?error=google_not_configured", status_code=302
+            )
         redirect_uri = str(request.url_for("google_callback"))
         if redirect_uri.startswith("/"):
             scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-            host = request.headers.get("x-forwarded-host", request.url.netloc.split(":")[0] if request.url.netloc else "localhost")
+            host = request.headers.get(
+                "x-forwarded-host",
+                request.url.netloc.split(":")[0] if request.url.netloc else "localhost",
+            )
             redirect_uri = f"{scheme}://{host}{redirect_uri}"
         try:
             async with httpx.AsyncClient() as client:
-                token_resp = await client.post("https://oauth2.googleapis.com/token", data={
-                    "code": code, "client_id": google_client_id, "client_secret": google_client_secret,
-                    "redirect_uri": redirect_uri, "grant_type": "authorization_code",
-                })
+                token_resp = await client.post(
+                    "https://oauth2.googleapis.com/token",
+                    data={
+                        "code": code,
+                        "client_id": google_client_id,
+                        "client_secret": google_client_secret,
+                        "redirect_uri": redirect_uri,
+                        "grant_type": "authorization_code",
+                    },
+                )
                 token_data = token_resp.json()
                 access_token = token_data.get("access_token")
                 if not access_token:
-                    return RedirectResponse(url="/login?error=google_token", status_code=302)
-                user_resp = await client.get("https://www.googleapis.com/oauth2/v3/userinfo",
-                                              headers={"Authorization": f"Bearer {access_token}"})
+                    return RedirectResponse(
+                        url="/login?error=google_token", status_code=302
+                    )
+                user_resp = await client.get(
+                    "https://www.googleapis.com/oauth2/v3/userinfo",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
                 userinfo = user_resp.json()
         except Exception:
             return RedirectResponse(url="/login?error=google_failed", status_code=302)
@@ -831,9 +1040,13 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
             request.session["user_name"] = user["name"]
             request.session["user_role"] = user.get("role", "user")
             request.session["user_email"] = user["email"]
-            log_login_attempt(email=email, success=True, user_id=user["id"],
-                              ip_address=request.client.host if request.client else "",
-                              user_agent=request.headers.get("user-agent", ""))
+            log_login_attempt(
+                email=email,
+                success=True,
+                user_id=user["id"],
+                ip_address=request.client.host if request.client else "",
+                user_agent=request.headers.get("user-agent", ""),
+            )
             return RedirectResponse(url="/", status_code=302)
         return RedirectResponse(url="/login?error=google_failed", status_code=302)
 
@@ -842,9 +1055,11 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
 
 # ── Runner ────────────────────────────────────────────────────────────────────
 
+
 def run_fastapi_dashboard(config: AppConfig):
     """Start the FastAPI dashboard via uvicorn."""
     import uvicorn
+
     app = create_fastapi_app(config)
     host = config.dashboard_host
     port = config.dashboard_port

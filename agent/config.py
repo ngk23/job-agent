@@ -3,12 +3,12 @@ Configuration management for Job Agent.
 Supports environment variables, YAML config, and profile JSON.
 """
 
-import os
 import json
 import logging
-from pathlib import Path
-from typing import Optional, Dict, Any
+import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +29,17 @@ def validate_config_run(config: "AppConfig") -> bool:
         return True  # Ollama is local — no API key needed
     if not config.openrouter_api_key and not config.groq_api_key:
         print("[ERROR] No AI provider configured. Set either:")
-        print('   OLLAMA_BASE_URL="http://localhost:11434"   (local LLM — $0 cost, recommended)')
-        print('   — or —')
-        print('   OPENROUTER_API_KEY="sk-or-..."   (via OpenRouter, free tier available)')
-        print('   — or —')
-        print('   GROQ_API_KEY="gsk_..."           (via Groq, faster free tier, 30 req/min)')
+        print(
+            '   OLLAMA_BASE_URL="http://localhost:11434"   (local LLM — $0 cost, recommended)'
+        )
+        print("   — or —")
+        print(
+            '   OPENROUTER_API_KEY="sk-or-..."   (via OpenRouter, free tier available)'
+        )
+        print("   — or —")
+        print(
+            '   GROQ_API_KEY="gsk_..."           (via Groq, faster free tier, 30 req/min)'
+        )
         print("Get a free key at https://console.groq.com")
         return False
     return True
@@ -93,14 +99,20 @@ class AppConfig:
         self.resume_path = get_env("RESUME_PATH", self.resume_path) or self.resume_path
         self.headless = get_env("HEADLESS", "false").lower() == "true" or self.headless
         self.min_score = int(get_env("MIN_SCORE", str(self.min_score)))
-        self.rate_limit_base_delay = float(get_env("RATE_LIMIT_BASE_DELAY", str(self.rate_limit_base_delay)))
-        self.rate_limit_max_delay = float(get_env("RATE_LIMIT_MAX_DELAY", str(self.rate_limit_max_delay)))
+        self.rate_limit_base_delay = float(
+            get_env("RATE_LIMIT_BASE_DELAY", str(self.rate_limit_base_delay))
+        )
+        self.rate_limit_max_delay = float(
+            get_env("RATE_LIMIT_MAX_DELAY", str(self.rate_limit_max_delay))
+        )
         self.dashboard_port = int(get_env("DASHBOARD_PORT", str(self.dashboard_port)))
         self.dashboard_host = get_env("DASHBOARD_HOST", self.dashboard_host)
         self.data_dir = get_env("DATA_DIR", self.data_dir)
         self.database_url = get_env("DATABASE_URL", self.database_url)
         self.word_export_path = get_env("WORD_EXPORT_PATH", self.word_export_path)
-        self.auto_keywords = get_env("AUTO_KEYWORDS", "true").lower() != "false" and self.auto_keywords
+        self.auto_keywords = (
+            get_env("AUTO_KEYWORDS", "true").lower() != "false" and self.auto_keywords
+        )
         self.max_job_search = int(get_env("MAX_JOB_SEARCH", str(self.max_job_search)))
 
         # Auto-detect Hugging Face Spaces environment
@@ -155,7 +167,9 @@ def load_profile(path: str = "profiles/profile.json") -> Dict[str, Any]:
     """Load and validate user profile from JSON file."""
     profile_path = Path(path)
     if not profile_path.exists():
-        raise FileNotFoundError(f"Profile not found at {path}. Please create profiles/profile.json")
+        raise FileNotFoundError(
+            f"Profile not found at {path}. Please create profiles/profile.json"
+        )
 
     with open(profile_path) as f:
         profile = json.load(f)

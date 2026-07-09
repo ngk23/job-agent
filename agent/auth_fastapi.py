@@ -4,20 +4,20 @@ Uses werkzeug for password hashing and Starlette's SessionMiddleware for auth st
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from starlette.requests import Request
-from starlette.responses import RedirectResponse, JSONResponse
-from werkzeug.security import generate_password_hash, check_password_hash
+from starlette.responses import JSONResponse, RedirectResponse
+from werkzeug.security import check_password_hash, generate_password_hash
 
+from .auth import register_user
 from .database import (
     create_user,
+    get_all_users,
     get_user_by_email,
     get_user_by_id,
-    get_all_users,
     init_db,
 )
-from .auth import register_user
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +37,16 @@ def verify_password(password: str, hash_str: str) -> bool:
 # ── Session Management ────────────────────────────────────────────────────────
 
 
-def login_user_fastapi(request: Request, email: str, password: str) -> Optional[Dict[str, Any]]:
+def login_user_fastapi(
+    request: Request, email: str, password: str
+) -> Optional[Dict[str, Any]]:
     """Authenticate a user. Sets session on the Starlette Request.
     Returns user dict on success, None on failure.
     Returns dict with 'error' key if user is pending or rejected.
     Auto-activates the default admin account if it's pending.
     """
     from .auth import DEFAULT_ADMIN_EMAIL
+
     user = get_user_by_email(email)
     if not user:
         return None
@@ -54,16 +57,23 @@ def login_user_fastapi(request: Request, email: str, password: str) -> Optional[
     status = user.get("status", "active")
     if status == "pending":
         if email.lower() == DEFAULT_ADMIN_EMAIL.lower():
-            from .database import update_user_status, update_user_role
+            from .database import update_user_role, update_user_status
+
             update_user_status(user["id"], "active")
             update_user_role(user["id"], "admin")
             logger.info(f"Auto-activated admin account: {email}")
             user = get_user_by_email(email)
             status = user.get("status", "active")
         else:
-            return {"error": "pending", "message": "Your account is pending admin approval."}
+            return {
+                "error": "pending",
+                "message": "Your account is pending admin approval.",
+            }
     if status == "rejected":
-        return {"error": "rejected", "message": "Your account registration was rejected by the admin."}
+        return {
+            "error": "rejected",
+            "message": "Your account registration was rejected by the admin.",
+        }
 
     # Set session
     request.session["user_id"] = user["id"]
@@ -92,6 +102,7 @@ def get_current_user_fastapi(request: Request) -> Optional[Dict[str, Any]]:
 def register_user(email: str, password: str, name: str) -> Optional[Dict[str, Any]]:
     """Register a new user (re-exports from auth.py)."""
     from .auth import register_user as _reg
+
     return _reg(email, password, name)
 
 
@@ -103,7 +114,9 @@ async def require_login_fastapi(request: Request):
     Redirects to /login for page requests, returns 401 for API requests.
     """
     if not request.session.get("user_id"):
-        if request.url.path.startswith("/api/") or request.url.path.startswith("/admin/"):
+        if request.url.path.startswith("/api/") or request.url.path.startswith(
+            "/admin/"
+        ):
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         return RedirectResponse(url="/login", status_code=302)
     return None  # Continue to route handler
@@ -114,11 +127,15 @@ async def require_admin_fastapi(request: Request):
     Returns 401 for unauthenticated, 403 for non-admins.
     """
     if not request.session.get("user_id"):
-        if request.url.path.startswith("/api/") or request.url.path.startswith("/admin/"):
+        if request.url.path.startswith("/api/") or request.url.path.startswith(
+            "/admin/"
+        ):
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         return RedirectResponse(url="/login", status_code=302)
     if request.session.get("user_role") != "admin":
-        if request.url.path.startswith("/api/") or request.url.path.startswith("/admin/"):
+        if request.url.path.startswith("/api/") or request.url.path.startswith(
+            "/admin/"
+        ):
             return JSONResponse({"error": "Admin access required"}, status_code=403)
         return JSONResponse({"error": "Admin access required"}, status_code=403)
     return None  # Continue to route handler
@@ -137,14 +154,22 @@ def get_user_id_fastapi(request: Request) -> Optional[int]:
 def require_login_json(request: Request):
     """FastAPI dependency: require auth for JSON APIs only. Returns 401 on failure."""
     if not request.session.get("user_id"):
-        return JSONResponse({"error": "Authentication required", "status": "unauthorized"}, status_code=401)
+        return JSONResponse(
+            {"error": "Authentication required", "status": "unauthorized"},
+            status_code=401,
+        )
     return None
 
 
 def require_admin_json(request: Request):
     """FastAPI dependency: require admin for JSON APIs. Returns 401/403 on failure."""
     if not request.session.get("user_id"):
-        return JSONResponse({"error": "Authentication required", "status": "unauthorized"}, status_code=401)
+        return JSONResponse(
+            {"error": "Authentication required", "status": "unauthorized"},
+            status_code=401,
+        )
     if request.session.get("user_role") != "admin":
-        return JSONResponse({"error": "Admin access required", "status": "forbidden"}, status_code=403)
+        return JSONResponse(
+            {"error": "Admin access required", "status": "forbidden"}, status_code=403
+        )
     return None

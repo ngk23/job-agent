@@ -7,6 +7,7 @@ Run Agent button, real-time streaming output, results display, and admin panel.
 # Load .env file early so env vars are available before module-level code runs
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -22,71 +23,99 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from flask import Flask, jsonify, render_template_string, request, Response, send_file, redirect, url_for, session
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    send_file,
+    session,
+    url_for,
+)
 
-from .config import AppConfig
-from .tracker import ApplicationTracker
-from .utils import _ensure_dirs
 from .auth import (
+    DEFAULT_ADMIN_EMAIL,
+    DEFAULT_ADMIN_PASSWORD,
+    ensure_admin_exists,
+    get_current_user,
+    get_user_id,
+    hash_password,
+    is_admin,
     login_user,
     logout_user,
     register_user,
-    get_current_user,
-    require_login,
     require_admin,
-    is_admin,
-    get_user_id,
-    ensure_admin_exists,
-    hash_password,
-    DEFAULT_ADMIN_EMAIL,
-    DEFAULT_ADMIN_PASSWORD,
+    require_login,
 )
-from .notifier import notify_approved, notify_rejected, set_gmail_credentials, _get_gmail_credentials
-from .email_utils import send_password_reset_email
-from .feedback_learning import get_feedback_insights_short
+from .config import AppConfig
 from .database import (
-    init_db, get_db, _cursor,
-    get_user_applications,
-    get_all_applications,
-    get_applied_urls,
-    mark_applied as db_mark_applied,
-    save_job as db_save_job,
-    unsave_job as db_unsave_job,
-    get_saved_application_ids,
-    get_all_users,
-    get_pending_users,
+    _cursor,
     approve_user,
-    reject_user,
-    get_stats,
-    clear_user_applications,
-    clear_all_applications,
-    save_application,
-    save_job_with_data,
-    get_saved_applications,
-    cleanup_old_saved_jobs,
-    update_user_role,
-    delete_user,
-    get_user_by_email as db_get_user_by_email,
-    get_user_by_id,
-    update_user_password,
-    create_password_reset_token,
-    get_user_by_reset_token,
-    use_password_reset_token,
     cleanup_expired_tokens,
-    log_login_attempt,
+    cleanup_old_saved_jobs,
+    clear_all_applications,
+    clear_user_applications,
+    create_password_reset_token,
+    delete_user,
+    get_active_users_count,
+    get_all_applications,
+    get_all_recent_activity,
+    get_all_users,
+    get_applied_urls,
+    get_db,
+    get_feedback_summary,
     get_login_logs,
-    # Security & password change
+    get_pending_users,
+    get_saved_application_ids,
+    get_saved_applications,
+    get_stats,
+    get_user_activity_stats,
+    get_user_applications,
+)
+from .database import get_user_by_email as db_get_user_by_email
+from .database import (
+    get_user_by_id,
+    get_user_by_reset_token,
+    init_db,
+    log_activity,
+    log_login_attempt,
+)
+from .database import (
+    mark_applied as db_mark_applied,  # Security & password change; Activity tracking
+)
+from .database import (
     mark_password_changed,
     mark_password_needs_change,
     needs_password_change,
-    # Activity tracking
-    log_activity,
-    get_all_recent_activity,
-    get_active_users_count,
-    get_user_activity_stats,
+    reject_user,
+    save_application,
     save_feedback,
-    get_feedback_summary,    update_user_resend_key,    update_gmail_credentials,
 )
+from .database import save_job as db_save_job
+from .database import (
+    save_job_with_data,
+)
+from .database import unsave_job as db_unsave_job
+from .database import (
+    update_gmail_credentials,
+    update_user_password,
+    update_user_resend_key,
+    update_user_role,
+    use_password_reset_token,
+)
+from .email_utils import send_password_reset_email
+from .feedback_learning import get_feedback_insights_short
+from .notifier import (
+    _get_gmail_credentials,
+    notify_approved,
+    notify_rejected,
+    set_gmail_credentials,
+)
+from .tracker import ApplicationTracker
+from .utils import _ensure_dirs
+
 logger = logging.getLogger(__name__)
 
 # ── Background runner ─────────────────────────────────────────────────────────
@@ -104,8 +133,10 @@ _selected_region: str = "Remote"  # Country/region selected by user
 
 # ── Applied Jobs Tracking ─────────────────────────────────────────────────────
 
+
 def _applied_path():
     return Path(_dashboard_data_dir) / "logs" / "applied.json"
+
 
 def _load_applied() -> set:
     """Load set of applied job URLs."""
@@ -119,11 +150,13 @@ def _load_applied() -> set:
     except (json.JSONDecodeError, IOError):
         return set()
 
+
 def _save_applied(applied: set):
     """Save set of applied job URLs."""
     path = _applied_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(sorted(applied), indent=2))
+
 
 def _mark_applied(job_url: str) -> bool:
     """Mark a job URL as applied. Returns True if newly marked."""
@@ -150,7 +183,9 @@ def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = N
         api_key = env.get("GROQ_API_KEY", "")
     if not api_key:
         _output_queue.put("[ERROR] No API key configured. Cannot run agent.\n")
-        _output_queue.put("[ERROR] Set GROQ_API_KEY (recommended) or OPENROUTER_API_KEY in environment/secret.\n")
+        _output_queue.put(
+            "[ERROR] Set GROQ_API_KEY (recommended) or OPENROUTER_API_KEY in environment/secret.\n"
+        )
         _run_complete = True
         return
     # Ensure the subprocess has the OpenRouter key
@@ -203,7 +238,9 @@ def _run_agent_in_thread(cwd: str, api_key: str = "", user_id: Optional[int] = N
         _run_returncode = process.returncode
 
         if not _stop_requested:
-            _output_queue.put(f"\n[SYSTEM] Agent finished with exit code {process.returncode}\n")
+            _output_queue.put(
+                f"\n[SYSTEM] Agent finished with exit code {process.returncode}\n"
+            )
         _run_complete = True
 
     except Exception as e:
@@ -225,39 +262,41 @@ def _agent_status():
 # FIXED_GROQ_BUGS ─────────────────────────────────────────────────────────────
 # USAGE_CHECK_SAFE
 
+
 def create_dashboard_app(config: AppConfig):
     """Create and configure the GUI Flask app."""
     try:
-        from flask import Flask, jsonify, render_template_string, request, Response, send_file
+        from flask import (
+            Flask,
+            Response,
+            jsonify,
+            render_template_string,
+            request,
+            send_file,
+        )
     except ImportError:
         logger.error("Flask not installed. Run: pip install flask")
         return None
 
     app = Flask(__name__)
-    app.config['JSON_SORT_KEYS'] = False
-    app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max upload
+    app.config["JSON_SORT_KEYS"] = False
+    app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB max upload
     # Stable secret derived from app config for session persistence across restarts
-    stable_secret = os.environ.get('DASHBOARD_SECRET_KEY', '')
+    stable_secret = os.environ.get("DASHBOARD_SECRET_KEY", "")
     if not stable_secret:
         stable_secret = hashlib.sha256(str(config.__dict__).encode()).hexdigest()[:32]
     app.secret_key = stable_secret
 
     # ProxyFix: handle reverse proxy headers so url_for(_external=True) works
     from werkzeug.middleware.proxy_fix import ProxyFix
+
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-
-
-
-
-
-
-
 
     # Ensure session cookies work correctly on HF Spaces behind proxy
     app.config.update(
         SESSION_COOKIE_SECURE=config.is_hf_space,
         SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE='Lax',
+        SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_DOMAIN=None,
     )
 
@@ -272,6 +311,7 @@ def create_dashboard_app(config: AppConfig):
 
     # Initialize Google OAuth (if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set)
     from .oauth import init_oauth
+
     init_oauth(app)
 
     # Initialize database and ensure admin user exists
@@ -282,8 +322,14 @@ def create_dashboard_app(config: AppConfig):
     # Load saved Gmail SMTP credentials from database
     try:
         admin_user = db_get_user_by_email(DEFAULT_ADMIN_EMAIL)
-        if admin_user and admin_user.get("gmail_user") and admin_user.get("gmail_app_password"):
-            set_gmail_credentials(admin_user["gmail_user"], admin_user["gmail_app_password"])
+        if (
+            admin_user
+            and admin_user.get("gmail_user")
+            and admin_user.get("gmail_app_password")
+        ):
+            set_gmail_credentials(
+                admin_user["gmail_user"], admin_user["gmail_app_password"]
+            )
             logger.info("Loaded Gmail SMTP credentials from database")
     except Exception as e:
         logger.warning("Could not load Gmail SMTP credentials from DB: %s", e)
@@ -2817,100 +2863,158 @@ async function loadFeedbackSummary() {
 
     # ── Auth Routes ──
 
-    @app.route('/login', methods=['GET', 'POST'])
+    @app.route("/login", methods=["GET", "POST"])
     def login_page():
         """Login page. GET shows form, POST authenticates."""
-        if session.get('user_id'):
-            return redirect(url_for('index'))
-        if request.method == 'GET':
-            error_param = request.args.get('error', '')
-            pending_msg = ''
-            if error_param == 'pending':
+        if session.get("user_id"):
+            return redirect(url_for("index"))
+        if request.method == "GET":
+            error_param = request.args.get("error", "")
+            pending_msg = ""
+            if error_param == "pending":
                 pending_msg = '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(255,170,0,0.1);border:1px solid rgba(255,170,0,0.3);border-radius:8px;color:var(--warning);font-size:0.85em;">Your account is pending admin approval. Please wait for an admin to activate it.</div>'
-            return render_template_string(LOGIN_HTML.replace('{pending_msg}', pending_msg))
+            return render_template_string(
+                LOGIN_HTML.replace("{pending_msg}", pending_msg)
+            )
         # POST
         # Ensure the admin account exists and is active on every login
         ensure_admin_exists()
         cleanup_old_saved_jobs(days=7)
-        
+
         # Accept both JSON and form-encoded data (JS fetch + traditional form fallback)
         data = request.get_json(silent=True) if request.is_json else request.form
-        if not data and request.method == 'POST':
+        if not data and request.method == "POST":
             data = request.form
         if not data:
-            return jsonify({'status': 'error', 'error': 'Invalid request'}), 400
-        email = data.get('email', '').strip().lower()
-        password = data.get('password', '')
+            return jsonify({"status": "error", "error": "Invalid request"}), 400
+        email = data.get("email", "").strip().lower()
+        password = data.get("password", "")
         if not email or not password:
-            return jsonify({'status': 'error', 'error': 'Email and password required'}), 400
+            return (
+                jsonify({"status": "error", "error": "Email and password required"}),
+                400,
+            )
         result = login_user(email, password)
         # Check if result is an error dict (pending/rejected) or actual user
-        if isinstance(result, dict) and result.get('error'):
-            if result['error'] == 'pending':
-                log_login_attempt(email=email, success=False, details='pending approval', ip_address=request.remote_addr or '', user_agent=request.user_agent.string if request.user_agent else '')
-                return jsonify({'status': 'error', 'error': '⏳ Your account is pending admin approval. Please wait for an admin to activate it.'}), 403
-            elif result['error'] == 'rejected':
-                log_login_attempt(email=email, success=False, details='rejected', ip_address=request.remote_addr or '', user_agent=request.user_agent.string if request.user_agent else '')
-                return jsonify({'status': 'error', 'error': '❌ Your account registration was rejected by the admin.'}), 403
+        if isinstance(result, dict) and result.get("error"):
+            if result["error"] == "pending":
+                log_login_attempt(
+                    email=email,
+                    success=False,
+                    details="pending approval",
+                    ip_address=request.remote_addr or "",
+                    user_agent=request.user_agent.string if request.user_agent else "",
+                )
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "error": "⏳ Your account is pending admin approval. Please wait for an admin to activate it.",
+                        }
+                    ),
+                    403,
+                )
+            elif result["error"] == "rejected":
+                log_login_attempt(
+                    email=email,
+                    success=False,
+                    details="rejected",
+                    ip_address=request.remote_addr or "",
+                    user_agent=request.user_agent.string if request.user_agent else "",
+                )
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "error": "❌ Your account registration was rejected by the admin.",
+                        }
+                    ),
+                    403,
+                )
         if not result:
-            return jsonify({'status': 'error', 'error': 'Invalid email or password'}), 401
+            return (
+                jsonify({"status": "error", "error": "Invalid email or password"}),
+                401,
+            )
         logger.info(f"User logged in: {email}")
         # Log successful login
         log_login_attempt(
             email=email,
             success=True,
-            user_id=result.get('id'),
-            ip_address=request.remote_addr or '',
-            user_agent=request.user_agent.string if request.user_agent else '',
+            user_id=result.get("id"),
+            ip_address=request.remote_addr or "",
+            user_agent=request.user_agent.string if request.user_agent else "",
         )
-                # Log activity
-        uid = result.get('id')
+        # Log activity
+        uid = result.get("id")
         if uid:
-            log_activity(uid, email, 'login', details=f"User {result['name']} logged in")
+            log_activity(
+                uid, email, "login", details=f"User {result['name']} logged in"
+            )
         # Check if password change is needed
         must_change = needs_password_change(uid) if uid else False
         # For traditional form submissions, redirect instead of returning JSON
-        if not request.is_json and request.form.get('email'):
+        if not request.is_json and request.form.get("email"):
             if must_change:
-                return redirect(url_for('change_password_page'))
-            return redirect(url_for('index'))
-        return jsonify({'status': 'ok', 'user': {'name': result['name'], 'email': result['email']}, 'must_change_password': must_change})
+                return redirect(url_for("change_password_page"))
+            return redirect(url_for("index"))
+        return jsonify(
+            {
+                "status": "ok",
+                "user": {"name": result["name"], "email": result["email"]},
+                "must_change_password": must_change,
+            }
+        )
 
-    @app.route('/signup', methods=['GET', 'POST'])
+    @app.route("/signup", methods=["GET", "POST"])
     def signup_page():
         """Signup page. GET shows form, POST registers."""
-        if session.get('user_id'):
-            return redirect(url_for('index'))
-        if request.method == 'GET':
+        if session.get("user_id"):
+            return redirect(url_for("index"))
+        if request.method == "GET":
             return render_template_string(SIGNUP_HTML)
         # POST
         data = request.get_json()
         if not data:
-            return jsonify({'status': 'error', 'error': 'Invalid request'}), 400
-        name = data.get('name', '').strip()
-        email = data.get('email', '').strip().lower()
-        password = data.get('password', '')
+            return jsonify({"status": "error", "error": "Invalid request"}), 400
+        name = data.get("name", "").strip()
+        email = data.get("email", "").strip().lower()
+        password = data.get("password", "")
         if not name or not email or not password:
-            return jsonify({'status': 'error', 'error': 'All fields required'}), 400
+            return jsonify({"status": "error", "error": "All fields required"}), 400
         if len(password) < 6:
-            return jsonify({'status': 'error', 'error': 'Password must be at least 6 characters'}), 400
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "error": "Password must be at least 6 characters",
+                    }
+                ),
+                400,
+            )
         user = register_user(email, password, name)
         if not user:
-            return jsonify({'status': 'error', 'error': 'Email already registered'}), 409
+            return (
+                jsonify({"status": "error", "error": "Email already registered"}),
+                409,
+            )
         # No auto-login — user must wait for admin approval
         logger.info(f"New user registered (pending approval): {email}")
-        return jsonify({'status': 'pending_approval', 'message': 'Account created! Please wait for admin approval before logging in.'})
+        return jsonify(
+            {
+                "status": "pending_approval",
+                "message": "Account created! Please wait for admin approval before logging in.",
+            }
+        )
 
-    @app.route('/logout', methods=['POST'])
+    @app.route("/logout", methods=["POST"])
     def logout():
         """Logout the current user."""
         logout_user()
-        return jsonify({'status': 'ok'})
-
+        return jsonify({"status": "ok"})
 
     # ── Change Password (user-facing) ──
 
-    
     CHANGE_PW_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3099,167 +3203,212 @@ async function showHackAnimation(email) {
 </html>
 """
 
-    @app.route('/change-password', methods=['GET', 'POST'])
+    @app.route("/change-password", methods=["GET", "POST"])
     @require_login
     def change_password_page():
         """Change password. Users redirected here if admin reset forces change."""
         uid = get_user_id()
-        if request.method == 'GET':
+        if request.method == "GET":
             return render_template_string(CHANGE_PW_HTML)
         data = request.get_json()
         if not data:
-            return jsonify({'status': 'error', 'error': 'Invalid request'}), 400
-        current = data.get('current_password', '')
-        new_pw = data.get('new_password', '')
+            return jsonify({"status": "error", "error": "Invalid request"}), 400
+        current = data.get("current_password", "")
+        new_pw = data.get("new_password", "")
         if not current or not new_pw:
-            return jsonify({'status': 'error', 'error': 'Both passwords required'}), 400
+            return jsonify({"status": "error", "error": "Both passwords required"}), 400
         if len(new_pw) < 6:
-            return jsonify({'status': 'error', 'error': 'Min 6 characters'}), 400
+            return jsonify({"status": "error", "error": "Min 6 characters"}), 400
         if current == new_pw:
-            return jsonify({'status': 'error', 'error': 'New password must differ'}), 400
+            return (
+                jsonify({"status": "error", "error": "New password must differ"}),
+                400,
+            )
         user = get_user_by_id(uid)
         if not user:
-            return jsonify({'status': 'error', 'error': 'User not found'}), 404
+            return jsonify({"status": "error", "error": "User not found"}), 404
         from werkzeug.security import check_password_hash
-        if not check_password_hash(user['password_hash'], current):
-            return jsonify({'status': 'error', 'error': 'Current password is incorrect'}), 403
+
+        if not check_password_hash(user["password_hash"], current):
+            return (
+                jsonify({"status": "error", "error": "Current password is incorrect"}),
+                403,
+            )
         pw_hash = hash_password(new_pw)
         ok = update_user_password(uid, pw_hash)
         if ok:
             mark_password_changed(uid)
-            log_activity(uid, user['email'], 'password_change', 'User changed password')
+            log_activity(uid, user["email"], "password_change", "User changed password")
             logger.info(f"User {uid} changed password")
-            return jsonify({'status': 'ok', 'message': 'Password changed'})
-        return jsonify({'status': 'error', 'error': 'Failed'}), 500
+            return jsonify({"status": "ok", "message": "Password changed"})
+        return jsonify({"status": "error", "error": "Failed"}), 500
 
     # ── Forgot / Reset Password Routes ──
 
-
-    @app.route('/login/google')
+    @app.route("/login/google")
     def google_login():
         """Initiate Google OAuth login."""
         from .oauth import get_google_oauth, is_google_oauth_configured
+
         if not is_google_oauth_configured():
-            return jsonify({'status': 'error', 'error': 'Google Sign-In not configured'}), 501
+            return (
+                jsonify({"status": "error", "error": "Google Sign-In not configured"}),
+                501,
+            )
         oauth = get_google_oauth()
         if not oauth:
-            return jsonify({'status': 'error', 'error': 'Google OAuth not initialized'}), 500
+            return (
+                jsonify({"status": "error", "error": "Google OAuth not initialized"}),
+                500,
+            )
         # Use APP_URL env var for deployment, fall back to request-based URL
         app_url = os.environ.get("APP_URL", "")
         if app_url:
             redirect_uri = f"{app_url.rstrip('/')}/login/google/callback"
         else:
-            redirect_uri = url_for('google_callback', _external=True)
+            redirect_uri = url_for("google_callback", _external=True)
         return oauth.google.authorize_redirect(redirect_uri)
 
-    @app.route('/login/google/callback')
+    @app.route("/login/google/callback")
     def google_callback():
         """Handle Google OAuth callback."""
-        from .oauth import extract_user_info, get_google_oauth, is_google_oauth_configured
-        from .database import create_user, get_user_by_email
-        from werkzeug.security import generate_password_hash
         import secrets
+
+        from werkzeug.security import generate_password_hash
+
+        from .database import create_user, get_user_by_email
+        from .oauth import (
+            extract_user_info,
+            get_google_oauth,
+            is_google_oauth_configured,
+        )
+
         if not is_google_oauth_configured():
-            return jsonify({'status': 'error', 'error': 'Google Sign-In not configured'}), 501
+            return (
+                jsonify({"status": "error", "error": "Google Sign-In not configured"}),
+                501,
+            )
         oauth = get_google_oauth()
         if not oauth:
-            return jsonify({'status': 'error', 'error': 'OAuth not initialized'}), 500
+            return jsonify({"status": "error", "error": "OAuth not initialized"}), 500
         try:
             token = oauth.google.authorize_access_token()
         except Exception as e:
             logger.error("Google OAuth token error: %s", e)
-            return redirect(url_for('login_page', _external=True) + '?error=oauth_failed')
+            return redirect(
+                url_for("login_page", _external=True) + "?error=oauth_failed"
+            )
         if not token:
-            return redirect(url_for('login_page', _external=True) + '?error=no_token')
-        userinfo = token.get('userinfo')
+            return redirect(url_for("login_page", _external=True) + "?error=no_token")
+        userinfo = token.get("userinfo")
         if not userinfo:
             try:
-                resp = oauth.google.get('https://www.googleapis.com/oauth2/v3/userinfo')
+                resp = oauth.google.get("https://www.googleapis.com/oauth2/v3/userinfo")
                 userinfo = resp.json()
             except Exception as e:
                 logger.error("Failed to get Google userinfo: %s", e)
-                return redirect(url_for('login_page', _external=True) + '?error=userinfo_failed')
+                return redirect(
+                    url_for("login_page", _external=True) + "?error=userinfo_failed"
+                )
         info = extract_user_info(userinfo)
-        if not info or not info['email']:
-            return redirect(url_for('login_page', _external=True) + '?error=no_email')
-        email = info['email']
-        name = info['name'] or email.split('@')[0]
+        if not info or not info["email"]:
+            return redirect(url_for("login_page", _external=True) + "?error=no_email")
+        email = info["email"]
+        name = info["name"] or email.split("@")[0]
         existing = get_user_by_email(email)
         if existing:
-            if existing.get('status') == 'pending':
-                return redirect(url_for('login_page', _external=True) + '?error=pending')
-            if existing.get('status') == 'rejected':
-                return redirect(url_for('login_page', _external=True) + '?error=rejected')
-            session['user_id'] = existing['id']
-            session['user_name'] = existing['name']
-            session['user_role'] = existing['role']
-            session['user_email'] = existing['email']
+            if existing.get("status") == "pending":
+                return redirect(
+                    url_for("login_page", _external=True) + "?error=pending"
+                )
+            if existing.get("status") == "rejected":
+                return redirect(
+                    url_for("login_page", _external=True) + "?error=rejected"
+                )
+            session["user_id"] = existing["id"]
+            session["user_name"] = existing["name"]
+            session["user_role"] = existing["role"]
+            session["user_email"] = existing["email"]
             logger.info("User logged in via Google: %s", email)
             try:
                 from .database import log_activity
-                log_activity(existing['id'], email, 'login', 'Google OAuth login')
+
+                log_activity(existing["id"], email, "login", "Google OAuth login")
             except Exception:
                 pass
-            return redirect(url_for('index', _external=True))
+            return redirect(url_for("index", _external=True))
         else:
             random_password = secrets.token_urlsafe(16)
             pw_hash = generate_password_hash(random_password)
-            user = create_user(email, pw_hash, name, role='user', status='pending')
+            user = create_user(email, pw_hash, name, role="user", status="pending")
             if user:
                 logger.info("New Google user created (pending approval): %s", email)
-                return redirect(url_for('login_page', _external=True) + '?error=pending')
+                return redirect(
+                    url_for("login_page", _external=True) + "?error=pending"
+                )
             else:
-                return redirect(url_for('login_page', _external=True) + '?error=creation_failed')
+                return redirect(
+                    url_for("login_page", _external=True) + "?error=creation_failed"
+                )
 
-    @app.route('/forgot-password', methods=['GET', 'POST'])
+    @app.route("/forgot-password", methods=["GET", "POST"])
     def forgot_password():
         """Forgot password page. GET shows form, POST sends reset email."""
-        if session.get('user_id'):
-            return redirect(url_for('index'))
-        if request.method == 'GET':
+        if session.get("user_id"):
+            return redirect(url_for("index"))
+        if request.method == "GET":
             return render_template_string(FORGOT_PASSWORD_HTML)
         # POST
         data = request.get_json()
-        if not data or not data.get('email'):
-            return jsonify({'status': 'error', 'error': 'Email required'}), 400
-        email = data['email'].strip().lower()
+        if not data or not data.get("email"):
+            return jsonify({"status": "error", "error": "Email required"}), 400
+        email = data["email"].strip().lower()
         # Always respond with same message for security (don't reveal if email exists)
         # Clean up expired tokens on every request
         cleanup_expired_tokens()
-        
+
         user = db_get_user_by_email(email)
-        if user and user.get('status') == 'active':
-            token = create_password_reset_token(user['id'])
+        if user and user.get("status") == "active":
+            token = create_password_reset_token(user["id"])
             if token:
-                sent = send_password_reset_email(email, user['name'], token)
+                sent = send_password_reset_email(email, user["name"], token)
                 if sent:
                     logger.info(f"Password reset email sent to {email}")
                 else:
-                    logger.info(f"Password reset email would be sent to {email} (no RESEND_API_KEY)")
+                    logger.info(
+                        f"Password reset email would be sent to {email} (no RESEND_API_KEY)"
+                    )
                     # Show the reset link directly since email is not configured
                     if token:
-                        reset_url = url_for('reset_password', token=token, _external=True)
-                        return jsonify({
-                            'status': 'ok',
-                            'message': '📧 Email sending not configured. Use this link directly:',
-                            'reset_url': reset_url,
-                            'token': token
-                        })
-        return jsonify({
-            'status': 'ok',
-            'message': 'If that email exists and is active, a reset link has been sent. Check your inbox (and spam folder).'
-        })
+                        reset_url = url_for(
+                            "reset_password", token=token, _external=True
+                        )
+                        return jsonify(
+                            {
+                                "status": "ok",
+                                "message": "📧 Email sending not configured. Use this link directly:",
+                                "reset_url": reset_url,
+                                "token": token,
+                            }
+                        )
+        return jsonify(
+            {
+                "status": "ok",
+                "message": "If that email exists and is active, a reset link has been sent. Check your inbox (and spam folder).",
+            }
+        )
 
-    @app.route('/reset-password/<token>', methods=['GET', 'POST'])
+    @app.route("/reset-password/<token>", methods=["GET", "POST"])
     def reset_password(token):
         """Reset password page. GET validates token, POST updates password."""
-        if session.get('user_id'):
-            return redirect(url_for('index'))
-        
+        if session.get("user_id"):
+            return redirect(url_for("index"))
+
         # Validate token
         user = get_user_by_reset_token(token)
         if not user:
-            return render_template_string(r"""<!DOCTYPE html>
+            return render_template_string(
+                r"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Job Agent - Invalid Link</title>
@@ -3297,34 +3446,47 @@ a:hover{text-decoration:underline}
 </div>
 </body>
 </html>
-""")
+"""
+            )
 
-        if request.method == 'GET':
+        if request.method == "GET":
             return render_template_string(RESET_PASSWORD_HTML)
-        
+
         # POST - update password
         data = request.get_json()
-        if not data or not data.get('password'):
-            return jsonify({'status': 'error', 'error': 'Password required'}), 400
-        
-        new_password = data['password']
+        if not data or not data.get("password"):
+            return jsonify({"status": "error", "error": "Password required"}), 400
+
+        new_password = data["password"]
         if len(new_password) < 6:
-            return jsonify({'status': 'error', 'error': 'Password must be at least 6 characters'}), 400
-        
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "error": "Password must be at least 6 characters",
+                    }
+                ),
+                400,
+            )
+
         new_hash = hash_password(new_password)
         # Update directly and verify the change took effect
         conn = get_db()
         cur = _cursor(conn)
-        cur.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user['id']))
+        cur.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["id"])
+        )
         conn.commit()
         # Verify the update actually persisted
-        cur.execute("SELECT password_hash FROM users WHERE id = ?", (user['id'],))
+        cur.execute("SELECT password_hash FROM users WHERE id = ?", (user["id"],))
         actual = cur.fetchone()
-        if actual and actual['password_hash'] == new_hash:
+        if actual and actual["password_hash"] == new_hash:
             use_password_reset_token(token)
             logger.info(f"Password reset completed for user {user['email']}")
-            return jsonify({'status': 'ok', 'message': 'Password reset! You can now log in.'})
-        return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
+            return jsonify(
+                {"status": "ok", "message": "Password reset! You can now log in."}
+            )
+        return jsonify({"status": "error", "error": "Failed to update password"}), 500
 
     # ── Forgot Password HTML ──
 
@@ -3703,36 +3865,39 @@ async function showHackAnimation(email) {
 
     # ── Main Routes (require login) ──
 
-    @app.route('/')
+    @app.route("/")
     @require_login
     def index():
         # Force password change if needed
         uid = get_user_id()
         if uid and needs_password_change(uid):
-            return redirect(url_for('change_password_page'))
+            return redirect(url_for("change_password_page"))
 
         user = get_current_user()
         return render_template_string(GUI_HTML, user=user)
 
-    @app.route('/healthz')
+    @app.route("/healthz")
     def healthz():
         """Health check endpoint for HF Spaces."""
-        return jsonify({'status': 'ok'})
+        return jsonify({"status": "ok"})
 
-    @app.route('/upload', methods=['POST'])
+    @app.route("/upload", methods=["POST"])
     @require_login
     def upload_file():
         global _run_complete
 
-        if 'file' not in request.files:
-            return jsonify({'status': 'error', 'error': 'No file provided'}), 400
+        if "file" not in request.files:
+            return jsonify({"status": "error", "error": "No file provided"}), 400
 
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'status': 'error', 'error': 'No file selected'}), 400
+        file = request.files["file"]
+        if file.filename == "":
+            return jsonify({"status": "error", "error": "No file selected"}), 400
 
-        if not file.filename.lower().endswith('.pdf'):
-            return jsonify({'status': 'error', 'error': 'Only PDF files are supported'}), 400
+        if not file.filename.lower().endswith(".pdf"):
+            return (
+                jsonify({"status": "error", "error": "Only PDF files are supported"}),
+                400,
+            )
 
         global _uploaded_filename
 
@@ -3751,9 +3916,9 @@ async function showHackAnimation(email) {
         _run_complete = False
 
         logger.info(f"CV '{_uploaded_filename}' uploaded and saved to {save_path}")
-        return jsonify({'status': 'ok', 'filename': _uploaded_filename})
+        return jsonify({"status": "ok", "filename": _uploaded_filename})
 
-    @app.route('/stop', methods=['POST'])
+    @app.route("/stop", methods=["POST"])
     @require_login
     def stop_agent():
         """Stop the running agent subprocess."""
@@ -3776,51 +3941,51 @@ async function showHackAnimation(email) {
             _output_queue.put("[SYSTEM] Agent stopped by user.\n")
 
         logger.info("Agent stopped by user")
-        return jsonify({'status': 'ok'})
+        return jsonify({"status": "ok"})
 
-    @app.route('/set-region', methods=['POST'])
+    @app.route("/set-region", methods=["POST"])
     @require_login
     def set_region():
         global _selected_region
         data = request.get_json()
-        if not data or 'region' not in data:
-            return jsonify({'status': 'error', 'error': 'No region provided'}), 400
-        region = data['region'].strip()
+        if not data or "region" not in data:
+            return jsonify({"status": "error", "error": "No region provided"}), 400
+        region = data["region"].strip()
         if not region:
-            return jsonify({'status': 'error', 'error': 'Empty region'}), 400
+            return jsonify({"status": "error", "error": "Empty region"}), 400
         _selected_region = region
         logger.info(f"Region set to: {region}")
-        return jsonify({'status': 'ok', 'region': region})
+        return jsonify({"status": "ok", "region": region})
 
-    @app.route('/set-api-key', methods=['POST'])
+    @app.route("/set-api-key", methods=["POST"])
     @require_login
     def set_api_key():
         global _gui_api_key
         data = request.get_json()
-        if not data or 'api_key' not in data:
-            return jsonify({'status': 'error', 'error': 'No API key provided'}), 400
+        if not data or "api_key" not in data:
+            return jsonify({"status": "error", "error": "No API key provided"}), 400
 
-        key = data['api_key'].strip()
-        if not key.startswith('sk-ant-'):
-            return jsonify({'status': 'error', 'error': 'Invalid key format'}), 400
+        key = data["api_key"].strip()
+        if not key.startswith("sk-ant-"):
+            return jsonify({"status": "error", "error": "Invalid key format"}), 400
 
         _gui_api_key = key
-        
+
         # Also save API key to user's profile in DB
         uid = get_user_id()
         if uid:
             update_user_api_key(uid, key)
-        
-        logger.info("API key configured via browser GUI")
-        return jsonify({'status': 'ok'})
 
-    @app.route('/run')
+        logger.info("API key configured via browser GUI")
+        return jsonify({"status": "ok"})
+
+    @app.route("/run")
     @require_login
     def run_agent():
         global _output_queue, _run_thread, _run_complete, _gui_api_key, _uploaded_filename
 
         if _run_thread and _run_thread.is_alive():
-            return jsonify({'error': 'Agent is already running'}), 409
+            return jsonify({"error": "Agent is already running"}), 409
 
         # Capture user_id BEFORE usage check (avoid NameError if DB fails)
         current_user_id = get_user_id()
@@ -3830,15 +3995,22 @@ async function showHackAnimation(email) {
             init_usage_table()
             if current_user_id:
                 usage_check = can_run_search(current_user_id)
-                if not usage_check.get('allowed', False):
-                    reason = usage_check.get('reason', 'Daily limit reached')
-                    logger.warning(f"User {current_user_id} blocked by usage limits: {reason}")
-                    return jsonify({
-                        'status': 'error',
-                        'error': reason,
-                        'usage_blocked': True,
-                        'usage_info': usage_check,
-                    }), 429
+                if not usage_check.get("allowed", False):
+                    reason = usage_check.get("reason", "Daily limit reached")
+                    logger.warning(
+                        f"User {current_user_id} blocked by usage limits: {reason}"
+                    )
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "error": reason,
+                                "usage_blocked": True,
+                                "usage_info": usage_check,
+                            }
+                        ),
+                        429,
+                    )
                 increment_search_count(current_user_id)
         except Exception as e:
             logger.error(f"Usage check failed (allowing run): {e}")
@@ -3868,14 +4040,14 @@ async function showHackAnimation(email) {
             while True:
                 try:
                     line = _output_queue.get(timeout=1)
-                    safe_line = line.replace('\n', '\\n')
+                    safe_line = line.replace("\n", "\\n")
                     yield f"data: {safe_line}\n\n"
                 except queue.Empty:
                     if _run_complete:
                         try:
                             while True:
                                 line = _output_queue.get_nowait()
-                                safe_line = line.replace('\n', '\\n')
+                                safe_line = line.replace("\n", "\\n")
                                 yield f"data: {safe_line}\n\n"
                         except queue.Empty:
                             pass
@@ -3889,21 +4061,21 @@ async function showHackAnimation(email) {
 
         return Response(
             generate(),
-            mimetype='text/event-stream',
+            mimetype="text/event-stream",
             headers={
-                'Cache-Control': 'no-cache',
-                'X-Accel-Buffering': 'no',
-                'Connection': 'keep-alive',
-            }
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
         )
 
-    @app.route('/results')
+    @app.route("/results")
     @require_login
     def get_results():
         data_dir = Path(config.data_dir)
         files = []
 
-        for pattern in ['jobs_*.docx', 'cv_*.pdf']:
+        for pattern in ["jobs_*.docx", "cv_*.pdf"]:
             for f in data_dir.glob(pattern):
                 files.append(f.name)
 
@@ -3913,16 +4085,18 @@ async function showHackAnimation(email) {
         stats = user_tracker.get_stats()
         high_match = len(user_tracker.get_high_match(min_score=80))
 
-        return jsonify({
-            'files': sorted(files),
-            'jobs_found': stats['total_jobs_reviewed'],
-            'high_match': high_match,
-            'cvs_generated': len([f for f in files if f.startswith('cv_')]),
-            'stats': stats,
-            'run_complete': _run_complete,
-        })
+        return jsonify(
+            {
+                "files": sorted(files),
+                "jobs_found": stats["total_jobs_reviewed"],
+                "high_match": high_match,
+                "cvs_generated": len([f for f in files if f.startswith("cv_")]),
+                "stats": stats,
+                "run_complete": _run_complete,
+            }
+        )
 
-    @app.route('/api/clear-history', methods=['POST'])
+    @app.route("/api/clear-history", methods=["POST"])
     @require_login
     def clear_history():
         """Clear user's scoring history."""
@@ -3940,36 +4114,36 @@ async function showHackAnimation(email) {
         else:
             tracker.clear()
         logger.info(f"History cleared for user {uid}")
-        return jsonify({'status': 'ok'})
+        return jsonify({"status": "ok"})
 
-    @app.route('/api/applied', methods=['GET'])
+    @app.route("/api/applied", methods=["GET"])
     @require_login
     def get_applied():
         uid = get_user_id()
         if uid:
             urls = get_applied_urls(uid)
-            return jsonify({'applied': sorted(urls)})
-        return jsonify({'applied': sorted(_load_applied())})
+            return jsonify({"applied": sorted(urls)})
+        return jsonify({"applied": sorted(_load_applied())})
 
-    @app.route('/api/mark-applied', methods=['POST'])
+    @app.route("/api/mark-applied", methods=["POST"])
     @require_login
     def mark_applied():
         data = request.get_json()
-        if not data or 'url' not in data:
-            return jsonify({'status': 'error', 'error': 'No URL provided'}), 400
-        url = data['url'].strip()
+        if not data or "url" not in data:
+            return jsonify({"status": "error", "error": "No URL provided"}), 400
+        url = data["url"].strip()
         if not url:
-            return jsonify({'status': 'error', 'error': 'Empty URL'}), 400
-        
+            return jsonify({"status": "error", "error": "Empty URL"}), 400
+
         uid = get_user_id()
         if uid:
             newly = db_mark_applied(uid, url)
         else:
             newly = _mark_applied(url)
         logger.info(f"Job marked as applied: {url[:80]}...")
-        return jsonify({'status': 'ok', 'newly_marked': newly})
+        return jsonify({"status": "ok", "newly_marked": newly})
 
-    @app.route('/api/history')
+    @app.route("/api/history")
     @require_login
     def get_history():
         uid = get_user_id()
@@ -3979,22 +4153,24 @@ async function showHackAnimation(email) {
             # 1. Load saved jobs from SQLite (user explicitly saved these)
             saved_apps = get_saved_applications(uid)
             for a in saved_apps:
-                jobs.append({
-                    'timestamp': a.get('timestamp', ''),
-                    'ai_score': a.get('ai_score', 0),
-                    'matching_skills': a.get('matching_skills', []),
-                    'concerns': a.get('concerns', []),
-                    'cover_letter': a.get('cover_letter', ''),
-                    'id': a.get('id'),
-                    'job': {
-                        'title': a.get('title', 'Unknown'),
-                        'company': a.get('company', 'Unknown'),
-                        'url': a.get('url', ''),
-                        'platform': a.get('platform', 'unknown'),
-                        'location': a.get('location', ''),
+                jobs.append(
+                    {
+                        "timestamp": a.get("timestamp", ""),
+                        "ai_score": a.get("ai_score", 0),
+                        "matching_skills": a.get("matching_skills", []),
+                        "concerns": a.get("concerns", []),
+                        "cover_letter": a.get("cover_letter", ""),
+                        "id": a.get("id"),
+                        "job": {
+                            "title": a.get("title", "Unknown"),
+                            "company": a.get("company", "Unknown"),
+                            "url": a.get("url", ""),
+                            "platform": a.get("platform", "unknown"),
+                            "location": a.get("location", ""),
+                        },
                     }
-                })
-            
+                )
+
             # 2. Load current session results from JSON file (not persisted)
             json_path = Path(config.data_dir) / "logs" / f"applications_{uid}.json"
             if json_path.exists():
@@ -4005,39 +4181,43 @@ async function showHackAnimation(email) {
                         if not isinstance(data, list):
                             data = [data]
                         for item in data:
-                            job_data = item.get('job', {})
-                            url = job_data.get('url', '')
+                            job_data = item.get("job", {})
+                            url = job_data.get("url", "")
                             # Skip if already saved (avoid duplicates)
-                            if any(j.get('job', {}).get('url') == url for j in jobs if url):
+                            if any(
+                                j.get("job", {}).get("url") == url for j in jobs if url
+                            ):
                                 continue
-                            jobs.append({
-                                'timestamp': item.get('timestamp', ''),
-                                'ai_score': item.get('ai_score', 0),
-                                'matching_skills': item.get('matching_skills', []),
-                                'concerns': item.get('concerns', []),
-                                'cover_letter': item.get('cover_letter', ''),
-                                'id': None,  # Not saved yet
-                                'job': {
-                                    'title': job_data.get('title', 'Unknown'),
-                                    'company': job_data.get('company', 'Unknown'),
-                                    'url': url,
-                                    'platform': job_data.get('platform', 'unknown'),
-                                    'location': job_data.get('location', ''),
+                            jobs.append(
+                                {
+                                    "timestamp": item.get("timestamp", ""),
+                                    "ai_score": item.get("ai_score", 0),
+                                    "matching_skills": item.get("matching_skills", []),
+                                    "concerns": item.get("concerns", []),
+                                    "cover_letter": item.get("cover_letter", ""),
+                                    "id": None,  # Not saved yet
+                                    "job": {
+                                        "title": job_data.get("title", "Unknown"),
+                                        "company": job_data.get("company", "Unknown"),
+                                        "url": url,
+                                        "platform": job_data.get("platform", "unknown"),
+                                        "location": job_data.get("location", ""),
+                                    },
                                 }
-                            })
+                            )
                 except Exception:
                     pass
-            
+
             # Sort by timestamp descending
-            jobs.sort(key=lambda j: j.get('timestamp', ''), reverse=True)
-            return jsonify({'jobs': jobs})
+            jobs.sort(key=lambda j: j.get("timestamp", ""), reverse=True)
+            return jsonify({"jobs": jobs})
         else:
             all_jobs = tracker.load_all()
-            all_jobs = [j for j in all_jobs if (j.get('ai_score') or 0) > 0]
+            all_jobs = [j for j in all_jobs if (j.get("ai_score") or 0) > 0]
             all_jobs.reverse()
-            return jsonify({'jobs': all_jobs[:200]})
+            return jsonify({"jobs": all_jobs[:200]})
 
-    @app.route('/download/<path:filename>')
+    @app.route("/download/<path:filename>")
     def download_file(filename):
         data_dir = Path(config.data_dir)
         filepath = data_dir / filename
@@ -4047,9 +4227,9 @@ async function showHackAnimation(email) {
         filepath = project_root / filename
         if filepath.exists() and filepath.is_file():
             return send_file(str(filepath), as_attachment=True)
-        return jsonify({'error': 'File not found'}), 404
+        return jsonify({"error": "File not found"}), 404
 
-    @app.route('/status')
+    @app.route("/status")
     @require_login
     def status():
         s = _agent_status()
@@ -4058,119 +4238,143 @@ async function showHackAnimation(email) {
         # Check if either Groq or OpenRouter API key is configured
         has_router_key = bool(_gui_api_key or config.openrouter_api_key)
         has_groq_key = bool(config.groq_api_key)
-        s['api_key_configured'] = has_router_key or has_groq_key
-        s['using_groq'] = has_groq_key
-        s['uploaded_filename'] = _uploaded_filename
-        s['selected_region'] = _selected_region
-        s['user'] = {
-            'id': uid,
-            'name': user['name'] if user else '',
-            'email': user['email'] if user else '',
-            'role': user['role'] if user else '',
-        } if user else None
+        s["api_key_configured"] = has_router_key or has_groq_key
+        s["using_groq"] = has_groq_key
+        s["uploaded_filename"] = _uploaded_filename
+        s["selected_region"] = _selected_region
+        s["user"] = (
+            {
+                "id": uid,
+                "name": user["name"] if user else "",
+                "email": user["email"] if user else "",
+                "role": user["role"] if user else "",
+            }
+            if user
+            else None
+        )
         return jsonify(s)
 
-    @app.route('/api/config')
+    @app.route("/api/config")
     @require_login
     def api_config():
         uid = get_user_id()
         user = get_current_user()
-        return jsonify({
-            'uploaded_filename': _uploaded_filename,
-            'data_dir': config.data_dir,
-            'is_hf_space': config.is_hf_space,
-            'user': {
-                'id': uid,
-                'name': user['name'] if user else '',
-                'email': user['email'] if user else '',
-                'role': user['role'] if user else '',
-            } if user else None,
-        })
+        return jsonify(
+            {
+                "uploaded_filename": _uploaded_filename,
+                "data_dir": config.data_dir,
+                "is_hf_space": config.is_hf_space,
+                "user": (
+                    {
+                        "id": uid,
+                        "name": user["name"] if user else "",
+                        "email": user["email"] if user else "",
+                        "role": user["role"] if user else "",
+                    }
+                    if user
+                    else None
+                ),
+            }
+        )
 
     # ── Save / Bookmark Jobs (80%+ only) ──
 
-    @app.route('/api/save-job', methods=['POST'])
+    @app.route("/api/save-job", methods=["POST"])
     @require_login
     def save_job_route():
         """Save/bookmark a job. Accepts full job data and saves it."""
         data = request.get_json()
         if not data:
-            return jsonify({'status': 'error', 'error': 'No data provided'}), 400
+            return jsonify({"status": "error", "error": "No data provided"}), 400
         uid = get_user_id()
-        
+
         # Build app entry from submitted data
-        job_data = data.get('job', data)
-        score = data.get('ai_score') or data.get('score') or 0
+        job_data = data.get("job", data)
+        score = data.get("ai_score") or data.get("score") or 0
         if score < 80:
-            return jsonify({'status': 'error', 'error': 'Only jobs with 80%+ match can be saved'}), 403
-        
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "error": "Only jobs with 80%+ match can be saved",
+                    }
+                ),
+                403,
+            )
+
         app_entry = {
-            'timestamp': data.get('timestamp', ''),
-            'title': job_data.get('title', 'Unknown'),
-            'company': job_data.get('company', 'Unknown'),
-            'url': job_data.get('url', ''),
-            'platform': job_data.get('platform', 'unknown'),
-            'location': job_data.get('location', ''),
-            'ai_score': score,
-            'matching_skills': data.get('matching_skills', []),
-            'concerns': data.get('concerns', []),
-            'cover_letter': data.get('cover_letter', ''),
-            'job_description': job_data.get('description', ''),
+            "timestamp": data.get("timestamp", ""),
+            "title": job_data.get("title", "Unknown"),
+            "company": job_data.get("company", "Unknown"),
+            "url": job_data.get("url", ""),
+            "platform": job_data.get("platform", "unknown"),
+            "location": job_data.get("location", ""),
+            "ai_score": score,
+            "matching_skills": data.get("matching_skills", []),
+            "concerns": data.get("concerns", []),
+            "cover_letter": data.get("cover_letter", ""),
+            "job_description": job_data.get("description", ""),
         }
         app_id = save_job_with_data(uid, app_entry)
         if not app_id:
-            return jsonify({'status': 'error', 'error': 'Failed to save job'}), 500
-        return jsonify({'status': 'ok', 'application_id': app_id})
+            return jsonify({"status": "error", "error": "Failed to save job"}), 500
+        return jsonify({"status": "ok", "application_id": app_id})
 
-    @app.route('/api/unsave-job', methods=['POST'])
+    @app.route("/api/unsave-job", methods=["POST"])
     @require_login
     def unsave_job_route():
         """Remove a saved/bookmarked job and its application data."""
         data = request.get_json()
-        if not data or 'application_id' not in data:
-            return jsonify({'status': 'error', 'error': 'No application_id provided'}), 400
-        app_id = data['application_id']
+        if not data or "application_id" not in data:
+            return (
+                jsonify({"status": "error", "error": "No application_id provided"}),
+                400,
+            )
+        app_id = data["application_id"]
         uid = get_user_id()
         removed = db_unsave_job(uid, app_id)
         # Also delete the application data since user doesn't want it anymore
         if removed:
             from .database import delete_application
-            delete_application(app_id)
-        return jsonify({'status': 'ok', 'removed': removed})
 
-    @app.route('/api/saved', methods=['GET'])
+            delete_application(app_id)
+        return jsonify({"status": "ok", "removed": removed})
+
+    @app.route("/api/saved", methods=["GET"])
     @require_login
     def get_saved():
         """Get list of saved application IDs for current user."""
         uid = get_user_id()
         saved_ids = get_saved_application_ids(uid)
-        return jsonify({'saved': sorted(saved_ids)})
+        return jsonify({"saved": sorted(saved_ids)})
 
     # ── Admin Routes ──
 
-
-    @app.route('/api/usage-summary')
+    @app.route("/api/usage-summary")
     @require_admin
     def api_usage_summary():
         """Return today's usage stats for the admin panel."""
         from .usage_tracker import get_usage_summary, init_usage_table
+
         try:
             init_usage_table()
             summary = get_usage_summary()
             return jsonify(summary)
         except Exception as e:
             logger.error(f"Failed to get usage summary: {e}")
-            return jsonify({
-                'date': '',
-                'users_today': 0,
-                'max_users': 3,
-                'users_remaining': 3,
-                'max_searches_per_user': 250,
-                'user_details': {},
-                'error': str(e),
-            })
+            return jsonify(
+                {
+                    "date": "",
+                    "users_today": 0,
+                    "max_users": 3,
+                    "users_remaining": 3,
+                    "max_searches_per_user": 250,
+                    "user_details": {},
+                    "error": str(e),
+                }
+            )
 
-    @app.route('/admin')
+    @app.route("/admin")
     @require_admin
     def admin_panel():
         """Admin panel page."""
@@ -4455,19 +4659,19 @@ function escHtml(str) {
                 f'<td><div class="btn-group">'
                 f'<button class="btn-approve" onclick="approveUser({u["id"]})">✅ Approve</button>'
                 f'<button class="btn-reject" onclick="rejectUser({u["id"]})">✕ Reject</button>'
-                f'</div></td></tr>'
+                f"</div></td></tr>"
                 for u in pending_users
             )
-            pending_section = f'''
+            pending_section = f"""
   <div class="section-title">⏳ Pending Approval <span style="font-size:0.7em;color:var(--warning);font-weight:400;">({len(pending_users)} waiting)</span></div>
   <table>
     <tr><th>ID</th><th>Name</th><th>Email</th><th>Actions</th></tr>
     {pending_rows}
   </table>
-'''
+"""
         else:
             pending_section = '<div class="section-title">⏳ Pending Approval <span style="font-size:0.7em;color:var(--text-dim);font-weight:400;">(none)</span></div><div class="empty">No pending users. All accounts have been processed.</div>'
-        
+
         # Build users table rows
         users_rows_list = []
         for u in users:
@@ -4480,45 +4684,45 @@ function escHtml(str) {
                 f'<tr><td>{uid}</td><td>{u["name"]}</td><td>{u["email"]}</td>'
                 f'<td><span class="badge badge-{role_class}">{u["role"]}</span></td>'
                 f'<td><span class="badge badge-{status_class}">{status_text}</span></td>'
-                f'<td>{created}</td>'
-                f'<td><button class="btn-activity" onclick=\"showUserActivity({uid})\">📋 Activity</button></td>'
+                f"<td>{created}</td>"
+                f'<td><button class="btn-activity" onclick="showUserActivity({uid})">📋 Activity</button></td>'
                 f'<td><div class="btn-group">'
-                f'<button class="btn-reset" onclick=\"resetUserPassword({uid})\">🔑 Reset Pw</button>'
-                f'<button class="btn-delete" onclick=\"deleteUser({uid})\">🗑 Delete</button>'
-                f'</div></td></tr>'
+                f'<button class="btn-reset" onclick="resetUserPassword({uid})">🔑 Reset Pw</button>'
+                f'<button class="btn-delete" onclick="deleteUser({uid})">🗑 Delete</button>'
+                f"</div></td></tr>"
             )
         users_rows_str = "".join(users_rows_list)
-        html = html.replace('{len_users}', str(len(users)))
-        html = html.replace('{pending_count}', str(pending_count))
+        html = html.replace("{len_users}", str(len(users)))
+        html = html.replace("{pending_count}", str(pending_count))
         # feedback rate is populated via JS (id="feedbackRate")
-        html = html.replace('{pending_section}', pending_section)
-        html = html.replace('{users_rows}', users_rows_str)
+        html = html.replace("{pending_section}", pending_section)
+        html = html.replace("{users_rows}", users_rows_str)
         # Admin template uses plain string replacement, no Jinja2
-        return Response(html, mimetype='text/html')
+        return Response(html, mimetype="text/html")
 
-    @app.route('/admin/api/stats')
+    @app.route("/admin/api/stats")
     @require_admin
     def admin_stats():
         return jsonify(get_stats())
 
-    @app.route('/admin/api/users')
+    @app.route("/admin/api/users")
     @require_admin
     def admin_users():
-        return jsonify({'users': get_all_users()})
+        return jsonify({"users": get_all_users()})
 
-    @app.route('/admin/api/pending')
+    @app.route("/admin/api/pending")
     @require_admin
     def admin_pending():
-        return jsonify({'pending': get_pending_users()})
+        return jsonify({"pending": get_pending_users()})
 
-    @app.route('/admin/api/approve-user/<int:target_user_id>', methods=['POST'])
+    @app.route("/admin/api/approve-user/<int:target_user_id>", methods=["POST"])
     @require_admin
     def admin_approve_user(target_user_id):
         ok = approve_user(target_user_id)
         if ok:
             user = get_user_by_id(target_user_id)
-            email = user['email'] if user else ''
-            name = user['name'] if user else 'User'
+            email = user["email"] if user else ""
+            name = user["name"] if user else "User"
             logger.info(f"Admin approved user: {email}")
             # Send approval notification email
             if email:
@@ -4526,26 +4730,31 @@ function escHtml(str) {
                 if sent:
                     logger.info(f"Approval email sent to {email}")
                 else:
-                    logger.info(f"Approval email not sent to {email} (no email service configured)")
+                    logger.info(
+                        f"Approval email not sent to {email} (no email service configured)"
+                    )
             saved_key = None
             try:
                 admin = db_get_user_by_email(DEFAULT_ADMIN_EMAIL)
-                if admin and admin.get('resend_api_key'):
-                    saved_key = admin['resend_api_key']
+                if admin and admin.get("resend_api_key"):
+                    saved_key = admin["resend_api_key"]
             except Exception:
                 pass
-            has_key = bool(os.environ.get('RESEND_API_KEY') or saved_key)
-            return jsonify({'status': 'ok', 'email_sent': email and has_key})
-        return jsonify({'status': 'error', 'error': 'User not found or already approved'}), 404
+            has_key = bool(os.environ.get("RESEND_API_KEY") or saved_key)
+            return jsonify({"status": "ok", "email_sent": email and has_key})
+        return (
+            jsonify({"status": "error", "error": "User not found or already approved"}),
+            404,
+        )
 
-    @app.route('/admin/api/reject-user/<int:target_user_id>', methods=['POST'])
+    @app.route("/admin/api/reject-user/<int:target_user_id>", methods=["POST"])
     @require_admin
     def admin_reject_user(target_user_id):
         # Get user info BEFORE deleting
         user = get_user_by_id(target_user_id)
-        email = user['email'] if user else ''
-        name = user['name'] if user else 'User'
-        
+        email = user["email"] if user else ""
+        name = user["name"] if user else "User"
+
         ok = reject_user(target_user_id)
         if ok:
             logger.info(f"Admin rejected user: {email or target_user_id}")
@@ -4554,146 +4763,206 @@ function escHtml(str) {
                 sent = notify_rejected(email, name)
                 if sent:
                     logger.info(f"Rejection email sent to {email}")
-            return jsonify({'status': 'ok'})
-        return jsonify({'status': 'error', 'error': 'User not found or already processed'}), 404
+            return jsonify({"status": "ok"})
+        return (
+            jsonify(
+                {"status": "error", "error": "User not found or already processed"}
+            ),
+            404,
+        )
 
-    @app.route('/admin/api/set-resend-key', methods=['POST'])
+    @app.route("/admin/api/set-resend-key", methods=["POST"])
     @require_admin
     def admin_set_resend_key():
         """Save the Resend API key to the admin's account."""
         data = request.get_json()
-        if not data or not data.get('gmail_user') or not data.get('gmail_app_password'):
-            return jsonify({'status': 'error', 'error': 'Gmail user and app password required'}), 400
-        if '@' not in data.get('gmail_user', ''):
-            return jsonify({'status': 'error', 'error': 'Invalid Gmail address'}), 400
+        if not data or not data.get("gmail_user") or not data.get("gmail_app_password"):
+            return (
+                jsonify(
+                    {"status": "error", "error": "Gmail user and app password required"}
+                ),
+                400,
+            )
+        if "@" not in data.get("gmail_user", ""):
+            return jsonify({"status": "error", "error": "Invalid Gmail address"}), 400
         uid = get_user_id()
         if not uid:
-            return jsonify({'status': 'error', 'error': 'Not authenticated'}), 401
-        gmail_user = data['gmail_user'].strip()
-        gmail_app_password = data['gmail_app_password'].strip()
+            return jsonify({"status": "error", "error": "Not authenticated"}), 401
+        gmail_user = data["gmail_user"].strip()
+        gmail_app_password = data["gmail_app_password"].strip()
         if not gmail_user or not gmail_app_password:
-            return jsonify({'status': 'error', 'error': 'Gmail user and app password required'}), 400
+            return (
+                jsonify(
+                    {"status": "error", "error": "Gmail user and app password required"}
+                ),
+                400,
+            )
         ok = update_gmail_credentials(uid, gmail_user, gmail_app_password)
         if ok:
             set_gmail_credentials(gmail_user, gmail_app_password)
             logger.info("Gmail SMTP credentials saved for admin user %s", uid)
-            return jsonify({'status': 'ok', 'message': 'Email notifications configured!'})
-        return jsonify({'status': 'error', 'error': 'Failed to save credentials'}), 500
+            return jsonify(
+                {"status": "ok", "message": "Email notifications configured!"}
+            )
+        return jsonify({"status": "error", "error": "Failed to save credentials"}), 500
 
-    @app.route('/admin/api/user-apps/<int:target_user_id>')
+    @app.route("/admin/api/user-apps/<int:target_user_id>")
     @require_admin
     def admin_user_apps(target_user_id):
         apps = get_user_applications(target_user_id, limit=500)
-        return jsonify({'applications': apps})
+        return jsonify({"applications": apps})
 
-    @app.route('/admin/api/delete-user/<int:target_user_id>', methods=['POST'])
+    @app.route("/admin/api/delete-user/<int:target_user_id>", methods=["POST"])
     @require_admin
     def admin_delete_user(target_user_id):
         """Admin hard-deletes a user and all their data."""
         user = get_user_by_id(target_user_id)
         if not user:
-            return jsonify({'status': 'error', 'error': 'User not found'}), 404
-        if user.get('role') == 'admin':
-            return jsonify({'status': 'error', 'error': 'Cannot delete admin accounts'}), 403
-        email = user['email']
+            return jsonify({"status": "error", "error": "User not found"}), 404
+        if user.get("role") == "admin":
+            return (
+                jsonify({"status": "error", "error": "Cannot delete admin accounts"}),
+                403,
+            )
+        email = user["email"]
         delete_user(target_user_id)
         logger.info(f"Admin deleted user: {email} (ID {target_user_id})")
-        return jsonify({'status': 'ok'})
+        return jsonify({"status": "ok"})
 
-    @app.route('/admin/api/user-activity-all')
+    @app.route("/admin/api/user-activity-all")
     @require_admin
     def admin_user_activity_all():
-        return jsonify({'activity': get_all_recent_activity(limit=100)})
+        return jsonify({"activity": get_all_recent_activity(limit=100)})
 
-    @app.route('/admin/api/user-activity/<int:target_user_id>')
+    @app.route("/admin/api/user-activity/<int:target_user_id>")
     @require_admin
     def admin_user_activity(target_user_id):
         """Get activity log for a specific user."""
         from .database import get_user_activity
-        activity = get_user_activity(target_user_id, limit=50)
-        return jsonify({'activity': activity})
 
-    @app.route('/admin/api/active-users')
+        activity = get_user_activity(target_user_id, limit=50)
+        return jsonify({"activity": activity})
+
+    @app.route("/admin/api/active-users")
     @require_admin
     def admin_active_users():
-        return jsonify({'active_count': get_active_users_count(minutes=30)})
+        return jsonify({"active_count": get_active_users_count(minutes=30)})
 
-    @app.route('/api/my-feedback-stats', methods=['GET'])
+    @app.route("/api/my-feedback-stats", methods=["GET"])
     @require_login
     def my_feedback_stats():
         """Get feedback summary stats for the current user."""
         from .database import get_db
+
         uid = get_user_id()
         conn = get_db()
         total = conn.execute(
             "SELECT COUNT(*) as c FROM job_feedback WHERE user_id = ?", (uid,)
         ).fetchone()["c"]
         up = conn.execute(
-            "SELECT COUNT(*) as c FROM job_feedback WHERE user_id = ? AND rating = 1", (uid,)
+            "SELECT COUNT(*) as c FROM job_feedback WHERE user_id = ? AND rating = 1",
+            (uid,),
         ).fetchone()["c"]
         down = conn.execute(
-            "SELECT COUNT(*) as c FROM job_feedback WHERE user_id = ? AND rating = -1", (uid,)
+            "SELECT COUNT(*) as c FROM job_feedback WHERE user_id = ? AND rating = -1",
+            (uid,),
         ).fetchone()["c"]
         rate = round(up / total * 100) if total > 0 else 0
-        return jsonify({"total": total, "thumbs_up": up, "thumbs_down": down, "positivity_rate": rate})
+        return jsonify(
+            {
+                "total": total,
+                "thumbs_up": up,
+                "thumbs_down": down,
+                "positivity_rate": rate,
+            }
+        )
 
-    @app.route('/api/user-feedback', methods=['GET'])
+    @app.route("/api/user-feedback", methods=["GET"])
     @require_login
     def get_user_feedback():
         """Get all feedback submitted by the current user."""
         from .database import get_db
+
         uid = get_user_id()
         conn = get_db()
         rows = conn.execute(
             "SELECT application_id, rating FROM job_feedback WHERE user_id = ?",
             (uid,),
         ).fetchall()
-        return jsonify({'feedback': [dict(r) for r in rows]})
+        return jsonify({"feedback": [dict(r) for r in rows]})
 
-    @app.route('/api/feedback', methods=['POST'])
+    @app.route("/api/feedback", methods=["POST"])
     @require_login
     def submit_feedback():
         uid = get_user_id()
         data = request.get_json()
-        if not data or data.get('rating') not in (-1, 1):
-            return jsonify({'status': 'error', 'error': 'Rating must be 1 or -1'}), 400
-        save_feedback(user_id=uid, rating=data['rating'], job_title=data.get('title',''), company=data.get('company',''), application_id=data.get('application_id'))
+        if not data or data.get("rating") not in (-1, 1):
+            return jsonify({"status": "error", "error": "Rating must be 1 or -1"}), 400
+        save_feedback(
+            user_id=uid,
+            rating=data["rating"],
+            job_title=data.get("title", ""),
+            company=data.get("company", ""),
+            application_id=data.get("application_id"),
+        )
         user = get_user_by_id(uid)
-        email = user['email'] if user else ''
-        log_activity(uid, email, 'feedback', f"Rated {'up' if data['rating'] == 1 else 'down'}")
-        return jsonify({'status': 'ok'})
+        email = user["email"] if user else ""
+        log_activity(
+            uid, email, "feedback", f"Rated {'up' if data['rating'] == 1 else 'down'}"
+        )
+        return jsonify({"status": "ok"})
 
-    @app.route('/admin/api/change-password', methods=['POST'])
+    @app.route("/admin/api/change-password", methods=["POST"])
     @require_admin
     def admin_change_password():
         """Change the current admin's password."""
         data = request.get_json()
         if not data:
-            return jsonify({'status': 'error', 'error': 'Invalid request'}), 400
-        
-        current = data.get('current_password', '')
-        new_password = data.get('new_password', '')
-        
+            return jsonify({"status": "error", "error": "Invalid request"}), 400
+
+        current = data.get("current_password", "")
+        new_password = data.get("new_password", "")
+
         if not current or not new_password:
-            return jsonify({'status': 'error', 'error': 'Both current and new password are required'}), 400
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "error": "Both current and new password are required",
+                    }
+                ),
+                400,
+            )
         if len(new_password) < 6:
-            return jsonify({'status': 'error', 'error': 'New password must be at least 6 characters'}), 400
-        
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "error": "New password must be at least 6 characters",
+                    }
+                ),
+                400,
+            )
+
         # Verify current password
-        from .auth import verify_password, hash_password
+        from .auth import hash_password, verify_password
+
         user = get_current_user()
-        if not user or not verify_password(current, user.get('password_hash', '')):
-            return jsonify({'status': 'error', 'error': 'Current password is incorrect'}), 403
-        
+        if not user or not verify_password(current, user.get("password_hash", "")):
+            return (
+                jsonify({"status": "error", "error": "Current password is incorrect"}),
+                403,
+            )
+
         # Update password
         new_hash = hash_password(new_password)
-        ok = update_user_password(user['id'], new_hash)
+        ok = update_user_password(user["id"], new_hash)
         if ok:
             logger.info(f"Admin password changed for user {user['email']}")
-            return jsonify({'status': 'ok'})
-        return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
+            return jsonify({"status": "ok"})
+        return jsonify({"status": "error", "error": "Failed to update password"}), 500
 
-    @app.route('/admin/api/reset-user-password/<int:target_user_id>', methods=['POST'])
+    @app.route("/admin/api/reset-user-password/<int:target_user_id>", methods=["POST"])
     @require_admin
     def admin_reset_user_password(target_user_id):
         """Admin resets any user's password.
@@ -4701,35 +4970,47 @@ function escHtml(str) {
         and returns it in the response.
         """
         import secrets
+
         data = request.get_json(silent=True)
-        if data and data.get('password'):
-            new_password = data['password']
+        if data and data.get("password"):
+            new_password = data["password"]
             if len(new_password) < 6:
-                return jsonify({'status': 'error', 'error': 'Password must be at least 6 characters'}), 400
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "error": "Password must be at least 6 characters",
+                        }
+                    ),
+                    400,
+                )
         else:
             # Auto-generate random 12-char password
             new_password = secrets.token_urlsafe(9)[:12]
         user = get_user_by_id(target_user_id)
         if not user:
-            return jsonify({'status': 'error', 'error': 'User not found'}), 404
+            return jsonify({"status": "error", "error": "User not found"}), 404
         new_hash = hash_password(new_password)
         ok = update_user_password(target_user_id, new_hash)
         if ok:
             mark_password_needs_change(target_user_id)
-            logger.info(f"Admin reset password for user {user['email']} (id={target_user_id})")
-            return jsonify({'status': 'ok', 'new_password': new_password})
-        return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
+            logger.info(
+                f"Admin reset password for user {user['email']} (id={target_user_id})"
+            )
+            return jsonify({"status": "ok", "new_password": new_password})
+        return jsonify({"status": "error", "error": "Failed to update password"}), 500
 
-    @app.route('/admin/emergency-reset', methods=['GET'])
+    @app.route("/admin/emergency-reset", methods=["GET"])
     def emergency_admin_reset():
         """Emergency endpoint: force-resets admin password to admin123.
         Requires ?key=reset2024 to prevent abuse.
         Only works for the hardcoded admin email.
         """
-        key = request.args.get('key', '')
-        if key != 'reset2024':
-            return '<h1>Unauthorized</h1><p>Invalid key. Use ?key=reset2024</p>', 403
-        from .database import update_user_password, get_user_by_email
+        key = request.args.get("key", "")
+        if key != "reset2024":
+            return "<h1>Unauthorized</h1><p>Invalid key. Use ?key=reset2024</p>", 403
+        from .database import get_user_by_email, update_user_password
+
         admin = get_user_by_email(DEFAULT_ADMIN_EMAIL)
         if not admin:
             return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1 style="color:#ff3355;">Admin Not Found</h1><p>No admin account exists.</p><a href="/login" style="color:#0ff;">Back to login</a></body></html>'
@@ -4738,54 +5019,56 @@ function escHtml(str) {
         logger.info(f"EMERGENCY: Admin password reset for {DEFAULT_ADMIN_EMAIL}")
         return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;text-align:center;"><h1 style="color:#00ff41;">Admin Password Reset</h1><p>The password has been reset to:</p><div style="color:#00ff41;font-size:1.2em;border:1px solid #00ff41;border-radius:4px;display:inline-block;padding:8px 16px;margin:12px 0;">admin123</div><p><a href="/login" style="color:#0ff;">Go to Login</a></p></body></html>'
 
-    @app.route('/test-login', methods=['GET'])
+    @app.route("/test-login", methods=["GET"])
     def test_login():
         """Simple GET-based login for debugging."""
         ensure_admin_exists()
-        email = request.args.get('email', '').strip().lower()
-        password = request.args.get('password', '')
+        email = request.args.get("email", "").strip().lower()
+        password = request.args.get("password", "")
         if not email or not password:
             return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1>Test Login</h1><form method="get"><label>Email: <input name="email" size="40"></label><br><label>Password: <input name="password" type="password"></label><br><button type="submit">Login</button></form></body></html>'
         result = login_user(email, password)
-        if isinstance(result, dict) and result.get('error'):
+        if isinstance(result, dict) and result.get("error"):
             return f'<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1 style="color:#ff3355;">Login Failed: {result["error"]}</h1><a href="/" style="color:#0ff;">Go to Dashboard</a></body></html>'
         if not result:
             if not result:
                 return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1 style="color:#ff3355;">Invalid credentials</h1><a href="/test-login" style="color:#0ff;">Try again</a></body></html>'
         return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;text-align:center;"><h1 style="color:#00ff41;">Login Successful!</h1><p>Session should be set.</p><a href="/" style="color:#0ff;">Go to Dashboard</a></body></html>'
 
-    @app.route('/admin/check-session')
+    @app.route("/admin/check-session")
     def check_session():
         """Debug: check if session is working."""
         from flask import make_response
+
         html = '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;">'
-        html += f'<h2>Session Debug</h2>'
+        html += f"<h2>Session Debug</h2>"
         html += f'<p>user_id: {session.get("user_id", "NOT SET")}</p>'
         html += f'<p>user_role: {session.get("user_role", "NOT SET")}</p>'
-        html += f'<p>cookies: {dict(request.cookies)}</p>'
-        html += f'<h3>Actions:</h3>'
+        html += f"<p>cookies: {dict(request.cookies)}</p>"
+        html += f"<h3>Actions:</h3>"
         html += f'<a href="/test-login?email={DEFAULT_ADMIN_EMAIL}&password={DEFAULT_ADMIN_PASSWORD}" style="color:#0ff;display:block;margin:8px 0;">Auto-login via GET</a>'
         html += f'<a href="/set-session-test" style="color:#0ff;display:block;margin:8px 0;">Set test session</a>'
-        html += '</body></html>'
+        html += "</body></html>"
         return html
 
-    @app.route('/set-session-test')
+    @app.route("/set-session-test")
     def set_session_test():
         """Set a test session value."""
-        session['test_value'] = 'hello'
+        session["test_value"] = "hello"
         from flask import make_response
-        resp = make_response(f'<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1>Session Set</h1><p>test_value=hello</p><a href="/admin/check-session" style="color:#0ff;">Check session</a></body></html>')
+
+        resp = make_response(
+            f'<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1>Session Set</h1><p>test_value=hello</p><a href="/admin/check-session" style="color:#0ff;">Check session</a></body></html>'
+        )
         return resp
 
     return app
 
 
-
-
 def _init_persistent_data(config: AppConfig):
     """Initialize persistent data directory with initial files from project.
     On Hugging Face Spaces, copies profiles/ and other data to /data.
-    
+
     Note: On HF Spaces, /profiles and /resume.pdf are symlinked to /data/,
     so reading them through project_root resolves to the (empty) persistent volume.
     We use a non-symlinked backup copy at /app/.default/ as fallback.
@@ -4797,7 +5080,7 @@ def _init_persistent_data(config: AppConfig):
     data_dir = Path(config.data_dir)
 
     # Ensure all required subdirectories exist
-    for subdir in ['logs', 'logs/sessions', 'profiles']:
+    for subdir in ["logs", "logs/sessions", "profiles"]:
         (data_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     import shutil
@@ -4824,16 +5107,18 @@ def _init_persistent_data(config: AppConfig):
             logger.warning(f"{src_rel} not found - skipping")
 
     # Copy profile template
-    _copy_with_fallback('profiles/profile.json', 'profiles/profile.json', '.default/profile.json')
+    _copy_with_fallback(
+        "profiles/profile.json", "profiles/profile.json", ".default/profile.json"
+    )
 
     # Copy existing resume.pdf if present
-    _copy_with_fallback('resume.pdf', 'resume.pdf', '.default/resume.pdf')
+    _copy_with_fallback("resume.pdf", "resume.pdf", ".default/resume.pdf")
 
     # Copy existing applications history if present
-    _copy_with_fallback('logs/applications.json', 'logs/applications.json')
+    _copy_with_fallback("logs/applications.json", "logs/applications.json")
 
     # Copy applied.json if present
-    _copy_with_fallback('logs/applied.json', 'logs/applied.json')
+    _copy_with_fallback("logs/applied.json", "logs/applied.json")
 
     logger.info(f"Persistent data initialized at {data_dir}")
 
@@ -4853,7 +5138,9 @@ def run_dashboard(config: AppConfig):
     if not config.openrouter_api_key:
         print(f"  [WARN] OPENROUTER_API_KEY is not set!")
         print(f"  [WARN] Enter it in the browser GUI (API Key field below the header)")
-        print(f"  [WARN] Or restart with: set OPENROUTER_API_KEY=sk-or-... && python -m agent dashboard")
+        print(
+            f"  [WARN] Or restart with: set OPENROUTER_API_KEY=sk-or-... && python -m agent dashboard"
+        )
         print()
     else:
         print(f"  [OK] OPENROUTER_API_KEY is configured")
@@ -4861,6 +5148,7 @@ def run_dashboard(config: AppConfig):
 
     # Open browser automatically
     import webbrowser
+
     threading.Timer(1.5, lambda: webbrowser.open(url)).start()
 
     app.run(host=host, port=port, debug=False, threaded=True)

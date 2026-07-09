@@ -8,9 +8,9 @@ Falls back quietly if no email service is configured.
 import logging
 import os
 import smtplib
-from typing import Any, Dict, List
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +43,18 @@ def _get_gmail_credentials() -> tuple:
     # First by specific admin email, then by role, then any user
     try:
         from .database import get_db, get_user_by_email
+
         conn = get_db()
 
         # Try 1: Look up the default admin email specifically
         from .auth import DEFAULT_ADMIN_EMAIL
+
         admin_user = get_user_by_email(DEFAULT_ADMIN_EMAIL)
-        if admin_user and admin_user.get("gmail_user") and admin_user.get("gmail_app_password"):
+        if (
+            admin_user
+            and admin_user.get("gmail_user")
+            and admin_user.get("gmail_app_password")
+        ):
             _runtime_gmail_user = admin_user["gmail_user"]
             _runtime_gmail_app_password = admin_user["gmail_app_password"]
             return _runtime_gmail_user, _runtime_gmail_app_password
@@ -124,40 +130,52 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
     """
     gmail_user, gmail_app_password = _get_gmail_credentials()
     if gmail_user and gmail_app_password:
-        return _send_via_gmail(to_email, subject, body, gmail_user, gmail_app_password, is_html=False)
+        return _send_via_gmail(
+            to_email, subject, body, gmail_user, gmail_app_password, is_html=False
+        )
     else:
-        logger.info(f"Email not sent (Gmail SMTP not configured). Would send to {to_email}: {subject}")
-        logger.info("Set GMAIL_USER and GMAIL_APP_PASSWORD env vars or configure in Admin panel.")
+        logger.info(
+            f"Email not sent (Gmail SMTP not configured). Would send to {to_email}: {subject}"
+        )
+        logger.info(
+            "Set GMAIL_USER and GMAIL_APP_PASSWORD env vars or configure in Admin panel."
+        )
         return False
 
 
-def send_html_email(to_email: str, subject: str, html_body: str, text_body: str = "") -> bool:
+def send_html_email(
+    to_email: str, subject: str, html_body: str, text_body: str = ""
+) -> bool:
     """Send an HTML email (with plain-text fallback) using Gmail SMTP.
     Returns True if sent successfully, False if not configured or failed.
     """
     gmail_user, gmail_app_password = _get_gmail_credentials()
     if not gmail_user or not gmail_app_password:
-        logger.info(f"HTML email not sent (Gmail SMTP not configured). Would send to {to_email}: {subject}")
-        logger.info("Set GMAIL_USER and GMAIL_APP_PASSWORD env vars or configure in Admin panel.")
+        logger.info(
+            f"HTML email not sent (Gmail SMTP not configured). Would send to {to_email}: {subject}"
+        )
+        logger.info(
+            "Set GMAIL_USER and GMAIL_APP_PASSWORD env vars or configure in Admin panel."
+        )
         return False
-    
+
     try:
         msg = MIMEMultipart("alternative")
         msg["From"] = gmail_user
         msg["To"] = to_email
         msg["Subject"] = subject
-        
+
         # Plain text fallback
         if text_body:
             msg.attach(MIMEText(text_body, "plain"))
-        
+
         # HTML body
         msg.attach(MIMEText(html_body, "html"))
-        
+
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
             server.login(gmail_user, gmail_app_password)
             server.sendmail(gmail_user, to_email, msg.as_string())
-        
+
         logger.info(f"HTML email sent to {to_email}: {subject}")
         return True
     except Exception as e:
@@ -165,7 +183,14 @@ def send_html_email(to_email: str, subject: str, html_body: str, text_body: str 
         return False
 
 
-def _send_via_gmail(to_email: str, subject: str, body: str, gmail_user: str, gmail_app_password: str, is_html: bool = True) -> bool:
+def _send_via_gmail(
+    to_email: str,
+    subject: str,
+    body: str,
+    gmail_user: str,
+    gmail_app_password: str,
+    is_html: bool = True,
+) -> bool:
     """Send email via Gmail SMTP."""
     try:
         if is_html:
@@ -274,7 +299,7 @@ Log in to view full details:
 
 def send_job_alert(to_email: str, user_name: str, jobs: List[Dict[str, Any]]) -> bool:
     """Send an email alert listing top-matching jobs.
-    
+
     Args:
         to_email: Recipient's email address (auto-extracted from CV)
         user_name: Recipient's name
@@ -285,27 +310,27 @@ def send_job_alert(to_email: str, user_name: str, jobs: List[Dict[str, Any]]) ->
             - url (str)
             - skills (list[str])
             - is_title_only (bool) - whether score was estimated from title only
-    
+
     Returns:
         True if sent successfully, False otherwise
     """
     if not jobs:
         return False
-    
+
     # Filter to 60%+ and sort by score descending
     top_jobs = sorted(
         [j for j in jobs if j.get("score", 0) >= 60],
         key=lambda j: j.get("score", 0),
         reverse=True,
     )
-    
+
     if not top_jobs:
         return False
-    
+
     # Build HTML job cards
     job_cards_html = []
     jobs_text_lines = []
-    
+
     for j in top_jobs:
         score = j.get("score", 0)
         if score >= 80:
@@ -317,16 +342,26 @@ def send_job_alert(to_email: str, user_name: str, jobs: List[Dict[str, Any]]) ->
         else:
             badge_class = "score-low"
             score_label = f"{score}% — Good Match"
-        
-        skills_html = "".join(
-            f"<span>{s}</span>" for s in j.get("skills", [])[:5]
-        ) if j.get("skills") else ""
-        
-        title_only_note = '<p class="title-only">⚠ Score estimated from title only (no description available)</p>' if j.get("is_title_only") else ""
-        
+
+        skills_html = (
+            "".join(f"<span>{s}</span>" for s in j.get("skills", [])[:5])
+            if j.get("skills")
+            else ""
+        )
+
+        title_only_note = (
+            '<p class="title-only">⚠ Score estimated from title only (no description available)</p>'
+            if j.get("is_title_only")
+            else ""
+        )
+
         apply_link = j.get("url", "")
-        apply_btn = f'<a class="apply-btn" href="{apply_link}">Apply Now →</a>' if apply_link else ""
-        
+        apply_btn = (
+            f'<a class="apply-btn" href="{apply_link}">Apply Now →</a>'
+            if apply_link
+            else ""
+        )
+
         card_html = f"""\
     <div class="job-card">
       <p class="job-title">{j.get('title', 'Unknown')}</p>
@@ -338,29 +373,30 @@ def send_job_alert(to_email: str, user_name: str, jobs: List[Dict[str, Any]]) ->
     </div>
 """
         job_cards_html.append(card_html)
-        
+
         # Text version
         title_note = " (title-only estimate)" if j.get("is_title_only") else ""
         skills_text = ", ".join(j.get("skills", [])[:3])
         skills_line = f"  • Matched: {skills_text}" if skills_text else ""
-        jobs_text_lines.append(f"• {j.get('title', 'Unknown')} @ {j.get('company', 'Unknown')} — {score}%{title_note}\n{skills_line}")
-    
-    
+        jobs_text_lines.append(
+            f"• {j.get('title', 'Unknown')} @ {j.get('company', 'Unknown')} — {score}%{title_note}\n{skills_line}"
+        )
+
     html_body = JOB_ALERT_BODY_HTML.format(
         name=user_name,
         high_match=len(top_jobs),
         job_cards="\n".join(job_cards_html),
     )
-    
+
     text_body = JOB_ALERT_TEXT.format(
         name=user_name,
         high_match=len(top_jobs),
         jobs_text="\n\n".join(jobs_text_lines),
         app_url=APP_URL,
     )
-    
+
     subject = JOB_ALERT_SUBJECT.format(high_match=len(top_jobs))
-    
+
     return send_html_email(to_email, subject, html_body, text_body)
 
 
@@ -379,7 +415,9 @@ If you did not request a password reset, you can safely ignore this email.
 """
 
 
-def send_password_reset_email(user_email: str, user_name: str, reset_token: str) -> bool:
+def send_password_reset_email(
+    user_email: str, user_name: str, reset_token: str
+) -> bool:
     """Send a password reset email with a secure token link."""
     reset_url = f"{APP_URL}/reset-password/{reset_token}"
     body = PASSWORD_RESET_BODY.format(name=user_name, reset_url=reset_url)

@@ -6,22 +6,22 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import httpx
 
 from .models import Job, Platform
 
-
 logger = logging.getLogger(__name__)
 
 
 # ─── Robust Selectors ──────────────────────────────────────────────────────────
 
+
 class Selectors:
     """CSS selectors for each platform with fallbacks."""
-    
+
     # LinkedIn
     LINKEDIN_CARDS = [
         ".job-search-card",
@@ -32,20 +32,66 @@ class Selectors:
     ]
     LINKEDIN_TITLE = [".base-search-card__title", ".job-title", "h3"]
     LINKEDIN_COMPANY = [".base-search-card__subtitle", ".company"]
-    LINKEDIN_LINK = ["a.base-card__full-link", "a[data-job-id]", "a[href*='/jobs/view']"]
-    
+    LINKEDIN_LINK = [
+        "a.base-card__full-link",
+        "a[data-job-id]",
+        "a[href*='/jobs/view']",
+    ]
+
     # Indeed
-    INDEED_CARDS = ["[data-jk]", ".card", "[class*='card']", ".job_seen_beacon", "li[class*='job']", "[data-testid*='job']"]
-    INDEED_TITLE = ["h2.jobTitle span", ".jobTitle", "h2", "[class*='title'] span", "span[class*='title']"]
-    INDEED_COMPANY = ["[data-testid='company-name']", "[data-testid*='company']", ".companyName", ".company", "[class*='company']"]
-    INDEED_LINK = ["a[id^='job_']", "a[href*='rc/clk']", "a[href*='/pagead/']", "a[data-jk]", "a[href*='/job/']"]
-    
+    INDEED_CARDS = [
+        "[data-jk]",
+        ".card",
+        "[class*='card']",
+        ".job_seen_beacon",
+        "li[class*='job']",
+        "[data-testid*='job']",
+    ]
+    INDEED_TITLE = [
+        "h2.jobTitle span",
+        ".jobTitle",
+        "h2",
+        "[class*='title'] span",
+        "span[class*='title']",
+    ]
+    INDEED_COMPANY = [
+        "[data-testid='company-name']",
+        "[data-testid*='company']",
+        ".companyName",
+        ".company",
+        "[class*='company']",
+    ]
+    INDEED_LINK = [
+        "a[id^='job_']",
+        "a[href*='rc/clk']",
+        "a[href*='/pagead/']",
+        "a[data-jk]",
+        "a[href*='/job/']",
+    ]
+
     # Glassdoor
-    GLASSDOOR_CARDS = ["[data-test*='job']", "[class*='JobCard']", "[data-test='cell-Jobs-url']", "[data-brandviews='JOB_CARD']", "[class*='jobListing']", "[class*='job-card']"]
-    GLASSDOOR_TITLE = ["[data-test='cell-Jobs-title']", "[class*='title'] a", "h2 a", "[class*='jobTitle']"]
-    GLASSDOOR_COMPANY = ["[data-test='employer-short-name']", "[data-test*='employer']", "[class*='employer']", "[class*='company']"]
+    GLASSDOOR_CARDS = [
+        "[data-test*='job']",
+        "[class*='JobCard']",
+        "[data-test='cell-Jobs-url']",
+        "[data-brandviews='JOB_CARD']",
+        "[class*='jobListing']",
+        "[class*='job-card']",
+    ]
+    GLASSDOOR_TITLE = [
+        "[data-test='cell-Jobs-title']",
+        "[class*='title'] a",
+        "h2 a",
+        "[class*='jobTitle']",
+    ]
+    GLASSDOOR_COMPANY = [
+        "[data-test='employer-short-name']",
+        "[data-test*='employer']",
+        "[class*='employer']",
+        "[class*='company']",
+    ]
     GLASSDOOR_LINK = ["[data-test='cell-Jobs-url'] a", "a[href*='/job/']"]
-    
+
     # Monster
     MONSTER_CARDS = [
         "[data-testid='job-card']",
@@ -81,6 +127,7 @@ class Selectors:
 
 
 # ─── Helper Functions ──────────────────────────────────────────────────────────
+
 
 async def robust_query(page, selector: str) -> Optional[Any]:
     """Query a single element, returning None if not found."""
@@ -183,51 +230,56 @@ async def safe_goto(page, url: str, timeout: int = 25000):
 
 # ─── Scraper Functions ─────────────────────────────────────────────────────────
 
+
 async def scrape_linkedin(page, query: str, location: str, limit: int = 0) -> List[Job]:
     """Scrape LinkedIn job listings."""
     jobs = []
     url = f"https://www.linkedin.com/jobs/search/?keywords={quote(query)}&location={quote(location)}"
     logger.info(f"Searching LinkedIn: {url}")
-    
+
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(3)
-        
+
         # Find job cards with fallback selectors
         cards = []
         for selector in Selectors.LINKEDIN_CARDS:
             cards = await robust_query_all(page, selector)
             if cards:
-                logger.info(f"Found {len(cards)} LinkedIn cards with selector: {selector}")
+                logger.info(
+                    f"Found {len(cards)} LinkedIn cards with selector: {selector}"
+                )
                 break
-        
+
         cards_to_process = cards if limit <= 0 else cards[:limit]
         for card in cards_to_process:
             try:
                 title_el = await robust_query(card, Selectors.LINKEDIN_TITLE[0])
                 company_el = await robust_query(card, Selectors.LINKEDIN_COMPANY[0])
                 link_el = await robust_query(card, "a")
-                
+
                 title = await get_text(title_el) if title_el else "Unknown"
                 company = await get_text(company_el) if company_el else "Unknown"
                 href = await get_attr(link_el, "href") if link_el else ""
-                
+
                 if href and href.startswith("/"):
                     href = "https://www.linkedin.com" + href
-                
-                jobs.append(Job(
-                    title=title.strip() or "Unknown",
-                    company=company.strip() or "Unknown",
-                    url=href or "",
-                    platform=Platform.LINKEDIN,
-                    description="",
-                ))
+
+                jobs.append(
+                    Job(
+                        title=title.strip() or "Unknown",
+                        company=company.strip() or "Unknown",
+                        url=href or "",
+                        platform=Platform.LINKEDIN,
+                        description="",
+                    )
+                )
             except Exception as e:
                 logger.warning(f"Error parsing LinkedIn card: {e}")
-                
+
     except Exception as e:
         logger.error(f"Failed to scrape LinkedIn: {e}")
-    
+
     return jobs
 
 
@@ -236,7 +288,7 @@ async def scrape_indeed(page, query: str, location: str, limit: int = 0) -> List
     jobs = []
     url = f"https://www.indeed.com/jobs?q={quote(query.replace(' ', '+'))}&l={quote(location.replace(' ', '+'))}&from=searchOnHP"
     logger.info(f"Searching Indeed: {url}")
-    
+
     ok = await safe_goto(page, url)
     if not ok:
         # Try alternative Indeed URL format
@@ -248,7 +300,8 @@ async def scrape_indeed(page, query: str, location: str, limit: int = 0) -> List
 
     # Strategy 1: Extract from window.mosaic.providerData JSON
     try:
-        extracted = await page.evaluate("""() => {
+        extracted = await page.evaluate(
+            """() => {
           try {
             const data = window.mosaic && window.mosaic.providerData &&
               window.mosaic.providerData['mosaic-provider-jobcards'];
@@ -262,25 +315,37 @@ async def scrape_indeed(page, query: str, location: str, limit: int = 0) -> List
             if (data.results) return data.results;
             return data;
           } catch(e) { return null; }
-        }""")
-        
+        }"""
+        )
+
         if extracted and isinstance(extracted, list) and len(extracted) > 0:
             logger.info(f"Extracted {len(extracted)} Indeed jobs from mosaic JSON")
             cards_to_process = extracted if limit <= 0 else extracted[:limit]
             for item in cards_to_process:
                 try:
-                    title = (item.get('title') or item.get('displayTitle') or '').strip()
-                    company = (item.get('company') or item.get('companyName') or item.get('cmpH1') or '').strip()
-                    jobkey = item.get('jobkey') or item.get('jk') or ''
-                    href = f"https://www.indeed.com/viewjob?jk={jobkey}" if jobkey else ''
+                    title = (
+                        item.get("title") or item.get("displayTitle") or ""
+                    ).strip()
+                    company = (
+                        item.get("company")
+                        or item.get("companyName")
+                        or item.get("cmpH1")
+                        or ""
+                    ).strip()
+                    jobkey = item.get("jobkey") or item.get("jk") or ""
+                    href = (
+                        f"https://www.indeed.com/viewjob?jk={jobkey}" if jobkey else ""
+                    )
                     if title:
-                        jobs.append(Job(
-                            title=title or "Unknown",
-                            company=company or "Unknown",
-                            url=href,
-                            platform=Platform.INDEED,
-                            description="",
-                        ))
+                        jobs.append(
+                            Job(
+                                title=title or "Unknown",
+                                company=company or "Unknown",
+                                url=href,
+                                platform=Platform.INDEED,
+                                description="",
+                            )
+                        )
                 except Exception as e:
                     logger.warning(f"Error parsing Indeed JSON item: {e}")
             if jobs:
@@ -291,7 +356,9 @@ async def scrape_indeed(page, query: str, location: str, limit: int = 0) -> List
     # Strategy 2: DOM-based extraction with fallback selectors
     logger.info("Indeed JSON extraction returned no results, trying DOM selectors...")
     try:
-        await page.wait_for_selector('[class*="card"], [data-jk], .job_seen_beacon', timeout=8000)
+        await page.wait_for_selector(
+            '[class*="card"], [data-jk], .job_seen_beacon', timeout=8000
+        )
         await asyncio.sleep(1)
     except:
         pass
@@ -299,29 +366,45 @@ async def scrape_indeed(page, query: str, location: str, limit: int = 0) -> List
     for selector in Selectors.INDEED_CARDS:
         cards = await robust_query_all(page, selector)
         if cards:
-            logger.info(f"Found {len(cards)} Indeed cards with DOM selector: {selector}")
+            logger.info(
+                f"Found {len(cards)} Indeed cards with DOM selector: {selector}"
+            )
             cards_to_process = cards if limit <= 0 else cards[:limit]
             for card in cards_to_process:
                 try:
                     # Get href from card's anchor
                     link_el = await card.query_selector("a[href]")
                     href = await get_attr(link_el, "href") if link_el else ""
-                    
-                    title = await get_text(await robust_query(card, "h2, .jobTitle, [class*='title']")) or ""
-                    company = await get_text(await robust_query(card, "[class*='company'], span[data-testid*='company']")) or ""
+
+                    title = (
+                        await get_text(
+                            await robust_query(card, "h2, .jobTitle, [class*='title']")
+                        )
+                        or ""
+                    )
+                    company = (
+                        await get_text(
+                            await robust_query(
+                                card, "[class*='company'], span[data-testid*='company']"
+                            )
+                        )
+                        or ""
+                    )
                     if not href:
                         jk_el = await card.query_selector("[data-jk]")
                         jk = await get_attr(jk_el, "data-jk") if jk_el else ""
                         if jk:
                             href = f"https://www.indeed.com/viewjob?jk={jk}"
                     if title:
-                        jobs.append(Job(
-                            title=title.strip() or "Unknown",
-                            company=company.strip() or "Unknown",
-                            url=href or "",
-                            platform=Platform.INDEED,
-                            description="",
-                        ))
+                        jobs.append(
+                            Job(
+                                title=title.strip() or "Unknown",
+                                company=company.strip() or "Unknown",
+                                url=href or "",
+                                platform=Platform.INDEED,
+                                description="",
+                            )
+                        )
                 except Exception as e:
                     logger.warning(f"Error parsing Indeed DOM card: {e}")
             break
@@ -330,12 +413,14 @@ async def scrape_indeed(page, query: str, location: str, limit: int = 0) -> List
     return jobs
 
 
-async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> List[Job]:
+async def scrape_glassdoor(
+    page, query: str, location: str, limit: int = 0
+) -> List[Job]:
     """Scrape Glassdoor job listings with overlay dismissal + DOM + JSON fallbacks."""
     jobs = []
     url = f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={quote(query)}&loc={quote(location)}&srs=RECENT_SEARCHES"
     logger.info(f"Searching Glassdoor: {url}")
-    
+
     ok = await safe_goto(page, url)
     if not ok:
         return jobs
@@ -346,7 +431,8 @@ async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> L
 
     # Try to dismiss the Glassdoor sign-up wall specifically
     try:
-        await page.evaluate("""() => {
+        await page.evaluate(
+            """() => {
           const btns = document.querySelectorAll('button, a, [role="button"]');
           for (const btn of btns) {
             const txt = (btn.textContent || '').toLowerCase();
@@ -361,14 +447,16 @@ async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> L
             .forEach(el => el.remove());
           // Un-hide body scroll
           document.body.style.overflow = 'auto';
-        }""")
+        }"""
+        )
         await asyncio.sleep(1)
     except Exception:
         pass
 
     # Strategy 1: Try to extract from embedded JSON (Apollo state or __NEXT_DATA__)
     try:
-        extracted = await page.evaluate("""() => {
+        extracted = await page.evaluate(
+            """() => {
           try {
             // Next.js data
             const el = document.getElementById('__NEXT_DATA__');
@@ -380,7 +468,8 @@ async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> L
             if (window.__APOLLO_STATE__) return window.__APOLLO_STATE__;
             return null;
           } catch(e) { return null; }
-        }""")
+        }"""
+        )
         if extracted:
             logger.info("Found embedded Glassdoor data, searching for jobs...")
             # Try to extract job listings from the data
@@ -388,33 +477,58 @@ async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> L
                 if isinstance(extracted, dict):
                     # Walk the dict looking for job arrays
                     def _find_job_arrays(obj, depth=0):
-                        if depth > 5: return None
+                        if depth > 5:
+                            return None
                         if isinstance(obj, list) and len(obj) > 0:
                             # Check if this looks like a job list
-                            if all(isinstance(x, dict) and (x.get('jobTitle') or x.get('title') or x.get('jobview')) for x in obj[:3]):
+                            if all(
+                                isinstance(x, dict)
+                                and (
+                                    x.get("jobTitle")
+                                    or x.get("title")
+                                    or x.get("jobview")
+                                )
+                                for x in obj[:3]
+                            ):
                                 return obj
                         if isinstance(obj, dict):
                             for v in obj.values():
                                 result = _find_job_arrays(v, depth + 1)
-                                if result: return result
+                                if result:
+                                    return result
                         return None
+
                     job_array = _find_job_arrays(extracted)
                     if job_array:
-                        logger.info(f"Found {len(job_array)} jobs in embedded Glassdoor data")
+                        logger.info(
+                            f"Found {len(job_array)} jobs in embedded Glassdoor data"
+                        )
                         for item in job_array:
-                            title = item.get('jobTitle') or item.get('title') or ''
-                            company = item.get('employer') or item.get('company') or item.get('employerName') or ''
-                            url = item.get('url') or item.get('jobview') or item.get('jobListingUrl') or ''
+                            title = item.get("jobTitle") or item.get("title") or ""
+                            company = (
+                                item.get("employer")
+                                or item.get("company")
+                                or item.get("employerName")
+                                or ""
+                            )
+                            url = (
+                                item.get("url")
+                                or item.get("jobview")
+                                or item.get("jobListingUrl")
+                                or ""
+                            )
                             if title:
-                                if url and not url.startswith('http'):
-                                    url = 'https://www.glassdoor.com' + url
-                                jobs.append(Job(
-                                    title=title.strip() or "Unknown",
-                                    company=company.strip() or "Unknown",
-                                    url=url.strip() or "",
-                                    platform=Platform.GLASSDOOR,
-                                    description="",
-                                ))
+                                if url and not url.startswith("http"):
+                                    url = "https://www.glassdoor.com" + url
+                                jobs.append(
+                                    Job(
+                                        title=title.strip() or "Unknown",
+                                        company=company.strip() or "Unknown",
+                                        url=url.strip() or "",
+                                        platform=Platform.GLASSDOOR,
+                                        description="",
+                                    )
+                                )
                             if len(jobs) >= (limit if limit > 0 else 100):
                                 break
             except Exception as je:
@@ -431,24 +545,31 @@ async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> L
             for card in cards_to_process:
                 try:
                     title_el = await robust_query(card, "h2 a, [class*='title'], h2")
-                    company_el = await robust_query(card, "[class*='employer'], [class*='company'], span[class*='Emp']")
-                    link_el = await robust_query(card, "a[href*='/job/'], a[href*='job' i]")
-                    
+                    company_el = await robust_query(
+                        card,
+                        "[class*='employer'], [class*='company'], span[class*='Emp']",
+                    )
+                    link_el = await robust_query(
+                        card, "a[href*='/job/'], a[href*='job' i]"
+                    )
+
                     title = await get_text(title_el) if title_el else ""
                     company = await get_text(company_el) if company_el else ""
                     href = await get_attr(link_el, "href") if link_el else ""
-                    
+
                     if href and href.startswith("/"):
                         href = "https://www.glassdoor.com" + href
-                    
+
                     if title:
-                        jobs.append(Job(
-                            title=title.strip() or "Unknown",
-                            company=company.strip() or "Unknown",
-                            url=href or "",
-                            platform=Platform.GLASSDOOR,
-                            description="",
-                        ))
+                        jobs.append(
+                            Job(
+                                title=title.strip() or "Unknown",
+                                company=company.strip() or "Unknown",
+                                url=href or "",
+                                platform=Platform.GLASSDOOR,
+                                description="",
+                            )
+                        )
                 except Exception as e:
                     logger.warning(f"Error parsing Glassdoor card: {e}")
             if jobs:
@@ -464,13 +585,15 @@ async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> L
                 if text and href:
                     if href.startswith("/"):
                         href = "https://www.glassdoor.com" + href
-                    jobs.append(Job(
-                        title=text.strip()[:80],
-                        company="Unknown",
-                        url=href,
-                        platform=Platform.GLASSDOOR,
-                        description="",
-                    ))
+                    jobs.append(
+                        Job(
+                            title=text.strip()[:80],
+                            company="Unknown",
+                            url=href,
+                            platform=Platform.GLASSDOOR,
+                            description="",
+                        )
+                    )
             if jobs:
                 logger.info(f"Found {len(jobs)} Glassdoor jobs via broad link search")
         except Exception as e:
@@ -481,7 +604,9 @@ async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> L
         try:
             await page.wait_for_timeout(2000)
             # Sometimes Glassdoor shows results in a ul or div with specific roles
-            items = await page.query_selector_all('[role="listitem"], [data-test*="job"], li[class*="job"]')
+            items = await page.query_selector_all(
+                '[role="listitem"], [data-test*="job"], li[class*="job"]'
+            )
             for item in items:
                 text = await get_text(item)
                 if text and len(text) > 10:
@@ -489,16 +614,18 @@ async def scrape_glassdoor(page, query: str, location: str, limit: int = 0) -> L
                     href = await get_attr(link_el, "href") if link_el else ""
                     if href and href.startswith("/"):
                         href = "https://www.glassdoor.com" + href
-                    lines = [l.strip() for l in text.split('\n') if l.strip()]
+                    lines = [l.strip() for l in text.split("\n") if l.strip()]
                     title = lines[0] if lines else "Unknown"
                     company = lines[1] if len(lines) > 1 else "Unknown"
-                    jobs.append(Job(
-                        title=title[:80],
-                        company=company[:80],
-                        url=href or "",
-                        platform=Platform.GLASSDOOR,
-                        description="",
-                    ))
+                    jobs.append(
+                        Job(
+                            title=title[:80],
+                            company=company[:80],
+                            url=href or "",
+                            platform=Platform.GLASSDOOR,
+                            description="",
+                        )
+                    )
         except Exception as e:
             logger.warning(f"Glassdoor listitem search failed: {e}")
 
@@ -511,14 +638,15 @@ async def scrape_monster(page, query: str, location: str, limit: int = 0) -> Lis
     jobs = []
     url = f"https://www.monster.com/jobs/search/?q={quote(query)}&l={quote(location)}"
     logger.info(f"Searching Monster: {url}")
-    
+
     ok = await safe_goto(page, url)
     if not ok:
         return jobs
 
     # Strategy 1: Extract from JSON-LD structured data (most stable)
     try:
-        jsonld_data = await page.evaluate("""() => {
+        jsonld_data = await page.evaluate(
+            """() => {
           const scripts = document.querySelectorAll('script[type="application/ld+json"]');
           const results = [];
           for (const script of scripts) {
@@ -537,27 +665,30 @@ async def scrape_monster(page, query: str, location: str, limit: int = 0) -> Lis
             } catch(e) {}
           }
           return results.length > 0 ? results : null;
-        }""")
-        
+        }"""
+        )
+
         if jsonld_data and isinstance(jsonld_data, list) and len(jsonld_data) > 0:
             logger.info(f"Extracted {len(jsonld_data)} Monster jobs from JSON-LD")
             items_to_process = jsonld_data if limit <= 0 else jsonld_data[:limit]
             for item in items_to_process:
                 try:
-                    title = (item.get('title') or item.get('name') or '').strip()
-                    company = ''
-                    if item.get('hiringOrganization'):
-                        company = item['hiringOrganization'].get('name', '') or ''
-                    company = company or item.get('company', '') or ''
-                    href = item.get('url') or item.get('@id') or ''
+                    title = (item.get("title") or item.get("name") or "").strip()
+                    company = ""
+                    if item.get("hiringOrganization"):
+                        company = item["hiringOrganization"].get("name", "") or ""
+                    company = company or item.get("company", "") or ""
+                    href = item.get("url") or item.get("@id") or ""
                     if title:
-                        jobs.append(Job(
-                            title=title or "Unknown",
-                            company=company.strip() or "Unknown",
-                            url=href.strip() or "",
-                            platform=Platform.MONSTER,
-                            description="",
-                        ))
+                        jobs.append(
+                            Job(
+                                title=title or "Unknown",
+                                company=company.strip() or "Unknown",
+                                url=href.strip() or "",
+                                platform=Platform.MONSTER,
+                                description="",
+                            )
+                        )
                 except Exception as e:
                     logger.warning(f"Error parsing Monster JSON-LD item: {e}")
             if jobs:
@@ -567,13 +698,15 @@ async def scrape_monster(page, query: str, location: str, limit: int = 0) -> Lis
 
     # Strategy 2: Try to extract from window.__INITIAL_STATE__ or similar
     try:
-        state_data = await page.evaluate("""() => {
+        state_data = await page.evaluate(
+            """() => {
           try {
             if (window.__INITIAL_STATE__) return window.__INITIAL_STATE__;
             if (window.__NEXT_DATA__) return JSON.parse(document.getElementById('__NEXT_DATA__').textContent);
             return null;
           } catch(e) { return null; }
-        }""")
+        }"""
+        )
         if state_data:
             logger.info("Found Monster initial state data")
     except Exception:
@@ -581,7 +714,10 @@ async def scrape_monster(page, query: str, location: str, limit: int = 0) -> Lis
 
     # Strategy 3: Wait for dynamic content and use DOM selectors
     try:
-        await page.wait_for_selector('[data-testid="job-card"], article, [class*="card"], li[class]', timeout=8000)
+        await page.wait_for_selector(
+            '[data-testid="job-card"], article, [class*="card"], li[class]',
+            timeout=8000,
+        )
         await asyncio.sleep(1)
     except:
         pass
@@ -589,7 +725,9 @@ async def scrape_monster(page, query: str, location: str, limit: int = 0) -> Lis
     for selector in Selectors.MONSTER_CARDS:
         cards = await robust_query_all(page, selector)
         if cards:
-            logger.info(f"Found {len(cards)} Monster cards with DOM selector: {selector}")
+            logger.info(
+                f"Found {len(cards)} Monster cards with DOM selector: {selector}"
+            )
             cards_to_process = cards if limit <= 0 else cards[:limit]
             for card in cards_to_process:
                 try:
@@ -601,7 +739,7 @@ async def scrape_monster(page, query: str, location: str, limit: int = 0) -> Lis
                             href = await get_attr(link_el, "href") or ""
                             if href:
                                 break
-                    
+
                     title = ""
                     for title_sel in Selectors.MONSTER_TITLE:
                         title_el = await robust_query(card, title_sel)
@@ -609,7 +747,7 @@ async def scrape_monster(page, query: str, location: str, limit: int = 0) -> Lis
                             title = await get_text(title_el) or ""
                             if title:
                                 break
-                    
+
                     company = ""
                     for comp_sel in Selectors.MONSTER_COMPANY:
                         comp_el = await robust_query(card, comp_sel)
@@ -617,18 +755,20 @@ async def scrape_monster(page, query: str, location: str, limit: int = 0) -> Lis
                             company = await get_text(comp_el) or ""
                             if company:
                                 break
-                    
+
                     if href and not href.startswith("http"):
                         href = "https://www.monster.com" + href
-                    
+
                     if title:
-                        jobs.append(Job(
-                            title=title.strip() or "Unknown",
-                            company=company.strip() or "Unknown",
-                            url=href or "",
-                            platform=Platform.MONSTER,
-                            description="",
-                        ))
+                        jobs.append(
+                            Job(
+                                title=title.strip() or "Unknown",
+                                company=company.strip() or "Unknown",
+                                url=href or "",
+                                platform=Platform.MONSTER,
+                                description="",
+                            )
+                        )
                 except Exception as e:
                     logger.warning(f"Error parsing Monster DOM card: {e}")
             if jobs:
@@ -646,13 +786,15 @@ async def scrape_monster(page, query: str, location: str, limit: int = 0) -> Lis
                     seen.add(href)
                     if not href.startswith("http"):
                         href = "https://www.monster.com" + href
-                    jobs.append(Job(
-                        title=text.strip()[:80],
-                        company="Unknown",
-                        url=href,
-                        platform=Platform.MONSTER,
-                        description="",
-                    ))
+                    jobs.append(
+                        Job(
+                            title=text.strip()[:80],
+                            company="Unknown",
+                            url=href,
+                            platform=Platform.MONSTER,
+                            description="",
+                        )
+                    )
             if jobs:
                 logger.info(f"Found {len(jobs)} Monster jobs via broad link search")
         except Exception as e:
@@ -669,7 +811,7 @@ async def get_description(page, job: Job, context=None) -> str:
     """
     if not job.url:
         return ""
-    
+
     # Strategy 1: Navigate to the job page first (always navigate to the correct URL)
     # This avoids extracting description from a previous job's page via the page pool
     try:
@@ -691,10 +833,11 @@ async def get_description(page, job: Job, context=None) -> str:
                 return ""
         else:
             return ""
-    
+
     # Strategy 2: Try to extract from embedded JSON-LD on the job page
     try:
-        desc = await page.evaluate("""() => {
+        desc = await page.evaluate(
+            """() => {
           const scripts = document.querySelectorAll('script[type="application/ld+json"]');
           for (const s of scripts) {
             try {
@@ -714,12 +857,13 @@ async def get_description(page, job: Job, context=None) -> str:
           if (meta && meta.getAttribute('content') && meta.getAttribute('content').length > 50)
             return meta.getAttribute('content');
           return null;
-        }""")
+        }"""
+        )
         if desc and len(desc) > 50:
             return desc[:3000]
     except Exception:
         pass
-    
+
     # Strategy 3: Use broad selectors for each platform
     # These are updated selectors that match current DOM structures
     try:
@@ -731,21 +875,21 @@ async def get_description(page, job: Job, context=None) -> str:
                 "div[id='job-description']",
                 "[class*='description']",
                 "article",
-                "main"
+                "main",
             ],
             Platform.INDEED: [
                 "#jobDescriptionText",
                 ".job-snippet",
                 "[class*='jobsearch-JobComponent']",
                 "[class*='description']",
-                "main"
+                "main",
             ],
             Platform.GLASSDOOR: [
                 "[class*='description']",
                 ".jobDescriptionContent",
                 "[data-testid='job-description']",
                 "article",
-                "main"
+                "main",
             ],
             Platform.MONSTER: [
                 "[data-testid='job-description']",
@@ -753,34 +897,38 @@ async def get_description(page, job: Job, context=None) -> str:
                 "#jobDescriptionContent",
                 "[class*='description']",
                 "article",
-                "main"
+                "main",
             ],
         }
-        
-        selectors = selectors_map.get(job.platform, ["body", "main", "article", "[class*='content']"])
-        
+
+        selectors = selectors_map.get(
+            job.platform, ["body", "main", "article", "[class*='content']"]
+        )
+
         for selector in selectors:
             el = await robust_query(page, selector)
             if el:
                 text = await get_text(el)
                 if text and len(text) > 50:
                     return text[:3000]
-        
+
         # Fallback: get all visible text from body
         body = await robust_query(page, "body")
         if body:
             text = await get_text(body)
             # Filter out common non-content text
-            lines = [l.strip() for l in text.split('\n') if l.strip() and len(l.strip()) > 20]
+            lines = [
+                l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 20
+            ]
             if lines:
-                combined = '\n'.join(lines[:50])  # First 50 substantial lines
+                combined = "\n".join(lines[:50])  # First 50 substantial lines
                 if len(combined) > 50:
                     return combined[:3000]
             return text[:3000]
-            
+
     except Exception as e:
         logger.warning(f"Failed to get description for {job.url}: {e}")
-    
+
     return ""
 
 
@@ -812,29 +960,29 @@ async def scrape_reed(query: str, location: str, limit: int = 0) -> List[Job]:
 
     jobs = []
     max_results = min(limit, 100) if limit > 0 else 100  # API max is 100
-    
+
     url = "https://www.reed.co.uk/api/1.0/search"
     params = {
         "keywords": query,
         "locationName": location,
         "resultsToTake": max_results,
     }
-    
+
     auth = httpx.BasicAuth(username=api_key, password="")
-    
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(url, params=params, auth=auth)
             resp.raise_for_status()
             data = resp.json()
-            
+
         results = data.get("results", [])
         if not results:
             logger.info(f"Reed: no results for '{query}' in {location}")
             return []
-        
+
         logger.info(f"Reed API returned {len(results)} jobs for '{query}'")
-        
+
         for item in results:
             try:
                 title = (item.get("jobTitle") or "").strip()
@@ -842,24 +990,28 @@ async def scrape_reed(query: str, location: str, limit: int = 0) -> List[Job]:
                 description = (item.get("jobDescription") or "").strip()
                 url = (item.get("jobUrl") or "").strip()
                 location_name = (item.get("locationName") or "").strip()
-                
+
                 if title:
-                    jobs.append(Job(
-                        title=title,
-                        company=company or "Unknown",
-                        url=url,
-                        platform=Platform.REED,
-                        location=location_name,
-                        description=description[:3000],  # Description comes free with API!
-                    ))
+                    jobs.append(
+                        Job(
+                            title=title,
+                            company=company or "Unknown",
+                            url=url,
+                            platform=Platform.REED,
+                            location=location_name,
+                            description=description[
+                                :3000
+                            ],  # Description comes free with API!
+                        )
+                    )
             except Exception as e:
                 logger.warning(f"Error parsing Reed item: {e}")
-                
+
     except httpx.HTTPStatusError as e:
         logger.error(f"Reed API HTTP error: {e}")
     except Exception as e:
         logger.error(f"Reed API request failed: {e}")
-    
+
     return jobs
 
 
@@ -872,14 +1024,16 @@ async def scrape_adzuna(query: str, location: str, limit: int = 0) -> List[Job]:
     app_id = keys["adzuna_app_id"]
     app_key = keys["adzuna_app_key"]
     country = keys.get("adzuna_country", "gb")
-    
+
     if not app_id or not app_key:
-        logger.info("Adzuna API keys not configured (set ADZUNA_APP_ID + ADZUNA_APP_KEY env vars)")
+        logger.info(
+            "Adzuna API keys not configured (set ADZUNA_APP_ID + ADZUNA_APP_KEY env vars)"
+        )
         return []
 
     jobs = []
     results_per_page = min(limit, 50) if limit > 0 else 50  # Keep reasonable
-    
+
     # Adzuna supports multiple countries: gb, us, ca, au, de, fr, nl, za, in, br, pl, se, at
     url = f"https://api.adzuna.com/v1/api/jobs/{country}/search/1"
     params = {
@@ -890,20 +1044,20 @@ async def scrape_adzuna(query: str, location: str, limit: int = 0) -> List[Job]:
         "results_per_page": results_per_page,
         "content-type": "application/json",
     }
-    
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
-            
+
         results = data.get("results", [])
         if not results:
             logger.info(f"Adzuna: no results for '{query}' in {location} ({country})")
             return []
-        
+
         logger.info(f"Adzuna API returned {len(results)} jobs for '{query}'")
-        
+
         for item in results:
             try:
                 title = (item.get("title") or "").strip()
@@ -913,30 +1067,32 @@ async def scrape_adzuna(query: str, location: str, limit: int = 0) -> List[Job]:
                     company = (company_data.get("display_name") or "").strip()
                 elif isinstance(company_data, str):
                     company = company_data
-                
+
                 description = (item.get("description") or "").strip()
                 url = (item.get("redirect_url") or "").strip()
-                
+
                 location_name = ""
                 location_data = item.get("location", {})
                 if isinstance(location_data, dict):
                     location_name = (location_data.get("display_name") or "").strip()
-                
+
                 if title:
-                    jobs.append(Job(
-                        title=title,
-                        company=company or "Unknown",
-                        url=url,
-                        platform=Platform.ADZUNA,
-                        location=location_name,
-                        description=description[:3000],  # Description included!
-                    ))
+                    jobs.append(
+                        Job(
+                            title=title,
+                            company=company or "Unknown",
+                            url=url,
+                            platform=Platform.ADZUNA,
+                            location=location_name,
+                            description=description[:3000],  # Description included!
+                        )
+                    )
             except Exception as e:
                 logger.warning(f"Error parsing Adzuna item: {e}")
-                
+
     except httpx.HTTPStatusError as e:
         logger.error(f"Adzuna API HTTP error: {e}")
     except Exception as e:
         logger.error(f"Adzuna API request failed: {e}")
-    
+
     return jobs

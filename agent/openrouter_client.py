@@ -23,13 +23,14 @@ class LLMClient:
 
     def __init__(self, api_key: str):
         import os
+
         ollama_url = os.environ.get("OLLAMA_BASE_URL", "").strip()
         self._using_ollama = bool(ollama_url)
 
         if self._using_ollama:
-            base_url = ollama_url.rstrip('/')
-            if not base_url.endswith('/v1'):
-                base_url += '/v1'
+            base_url = ollama_url.rstrip("/")
+            if not base_url.endswith("/v1"):
+                base_url += "/v1"
             ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3").strip()
             self.client = AsyncOpenAI(
                 base_url=base_url,
@@ -38,9 +39,20 @@ class LLMClient:
             self.models = [ollama_model]  # Single local model
             print(f"  [LLM] Using Ollama: {ollama_model} @ {base_url}")
             # Warn if model may not support vision (form filler needs vision-capable models)
-            _vision_models = {"llava", "minicpm-v", "moondream", "bakllava", "llama3.2-vision"}
-            if ollama_model.lower() not in _vision_models and "vision" not in ollama_model.lower():
-                print(f"  [LLM] ⚠ {ollama_model} may not support vision. For form filling, pull a vision model like 'llava' and set OLLAMA_MODEL=llava")
+            _vision_models = {
+                "llava",
+                "minicpm-v",
+                "moondream",
+                "bakllava",
+                "llama3.2-vision",
+            }
+            if (
+                ollama_model.lower() not in _vision_models
+                and "vision" not in ollama_model.lower()
+            ):
+                print(
+                    f"  [LLM] ⚠ {ollama_model} may not support vision. For form filling, pull a vision model like 'llava' and set OLLAMA_MODEL=llava"
+                )
         else:
             self.client = AsyncOpenAI(
                 base_url=OPENROUTER_BASE_URL,
@@ -52,7 +64,9 @@ class LLMClient:
             )
             self.models = [VISION_MODEL, TEXT_MODEL] + FALLBACK_MODELS
 
-    async def chat_with_vision(self, image_base64: str, prompt: str, max_tokens: int = 4000) -> str:
+    async def chat_with_vision(
+        self, image_base64: str, prompt: str, max_tokens: int = 4000
+    ) -> str:
         """Send screenshot + prompt to vision model."""
         for model in self.models:
             try:
@@ -65,7 +79,9 @@ class LLMClient:
                                 {"type": "text", "text": prompt},
                                 {
                                     "type": "image_url",
-                                    "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+                                    "image_url": {
+                                        "url": f"data:image/png;base64,{image_base64}"
+                                    },
                                 },
                             ],
                         }

@@ -8,8 +8,8 @@ Limits:
 """
 
 import logging
-from datetime import datetime, date
-from typing import Optional, Dict, Any
+from datetime import date, datetime
+from typing import Any, Dict, Optional
 
 from .database import get_db
 
@@ -23,7 +23,8 @@ MAX_SEARCHES_PER_USER = 250
 def init_usage_table():
     """Create the daily_usage table if it doesn't exist (safe to call multiple times)."""
     conn = get_db()
-    conn.executescript("""
+    conn.executescript(
+        """
         CREATE TABLE IF NOT EXISTS daily_usage (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -32,7 +33,8 @@ def init_usage_table():
             UNIQUE(user_id, usage_date)
         );
         CREATE INDEX IF NOT EXISTS idx_daily_usage_date ON daily_usage(usage_date);
-    """)
+    """
+    )
     conn.commit()
 
 
@@ -43,7 +45,7 @@ def _today_str() -> str:
 
 def get_today_usage() -> Dict[str, Any]:
     """Get current usage stats for today.
-    
+
     Returns:
         Dict with:
             - date: today's date string
@@ -52,14 +54,14 @@ def get_today_usage() -> Dict[str, Any]:
     """
     conn = get_db()
     today = _today_str()
-    
+
     rows = conn.execute(
         "SELECT user_id, search_count FROM daily_usage WHERE usage_date = ?",
         (today,),
     ).fetchall()
-    
+
     user_usage = {r["user_id"]: r["search_count"] for r in rows}
-    
+
     return {
         "date": today,
         "total_users": len(user_usage),
@@ -69,7 +71,7 @@ def get_today_usage() -> Dict[str, Any]:
 
 def can_run_search(user_id: int) -> Dict[str, Any]:
     """Check if a user is allowed to run a job search today.
-    
+
     Returns dict with:
         - allowed: bool
         - reason: str (why blocked, if not allowed)
@@ -80,13 +82,13 @@ def can_run_search(user_id: int) -> Dict[str, Any]:
     init_usage_table()
     today = _today_str()
     usage = get_today_usage()
-    
+
     # Check 1: How many searches has this user already done today?
     user_count = usage["user_usage"].get(user_id, 0)
-    
+
     # Check 2: If this is a new user for today, would we exceed the 3-user limit?
     is_new_user_today = user_id not in usage["user_usage"]
-    
+
     if is_new_user_today and usage["total_users"] >= MAX_USERS_PER_DAY:
         return {
             "allowed": False,
@@ -95,7 +97,7 @@ def can_run_search(user_id: int) -> Dict[str, Any]:
             "searches_remaining": 0,
             "users_today": usage["total_users"],
         }
-    
+
     if user_count >= MAX_SEARCHES_PER_USER:
         return {
             "allowed": False,
@@ -104,7 +106,7 @@ def can_run_search(user_id: int) -> Dict[str, Any]:
             "searches_remaining": 0,
             "users_today": usage["total_users"],
         }
-    
+
     return {
         "allowed": True,
         "reason": "",
@@ -121,18 +123,18 @@ def increment_search_count(user_id: int) -> bool:
     init_usage_table()
     today = _today_str()
     conn = get_db()
-    
+
     # Get current count
     row = conn.execute(
         "SELECT search_count FROM daily_usage WHERE user_id = ? AND usage_date = ?",
         (user_id, today),
     ).fetchone()
-    
+
     current = row["search_count"] if row else 0
-    
+
     if current >= MAX_SEARCHES_PER_USER:
         return False
-    
+
     if row:
         conn.execute(
             "UPDATE daily_usage SET search_count = search_count + 1 WHERE user_id = ? AND usage_date = ?",
@@ -150,7 +152,7 @@ def increment_search_count(user_id: int) -> bool:
             "INSERT INTO daily_usage (user_id, usage_date, search_count) VALUES (?, ?, 1)",
             (user_id, today),
         )
-    
+
     conn.commit()
     return True
 

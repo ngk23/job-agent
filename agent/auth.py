@@ -6,17 +6,16 @@ Uses werkzeug for password hashing and Flask sessions for auth state.
 
 import logging
 from functools import wraps
-from typing import Optional, Dict, Any, Callable
+from typing import Any, Callable, Dict, Optional
 
-from flask import session, redirect, url_for, request, jsonify, g
-
-from werkzeug.security import generate_password_hash, check_password_hash
+from flask import g, jsonify, redirect, request, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from .database import (
     create_user,
+    get_all_users,
     get_user_by_email,
     get_user_by_id,
-    get_all_users,
     init_db,
 )
 
@@ -48,13 +47,14 @@ def login_user(email: str, password: str) -> Optional[Dict[str, Any]]:
         return None
     if not verify_password(password, user["password_hash"]):
         return None
-    
+
     # Check account status
     status = user.get("status", "active")
     if status == "pending":
         # Auto-activate the default admin account so they can always log in
         if email.lower() == DEFAULT_ADMIN_EMAIL.lower():
-            from .database import update_user_status, update_user_role
+            from .database import update_user_role, update_user_status
+
             update_user_status(user["id"], "active")
             update_user_role(user["id"], "admin")
             logger.info(f"Auto-activated admin account: {email}")
@@ -62,10 +62,16 @@ def login_user(email: str, password: str) -> Optional[Dict[str, Any]]:
             user = get_user_by_email(email)
             status = user.get("status", "active")
         else:
-            return {"error": "pending", "message": "Your account is pending admin approval. Please wait for an admin to activate it."}
+            return {
+                "error": "pending",
+                "message": "Your account is pending admin approval. Please wait for an admin to activate it.",
+            }
     if status == "rejected":
-        return {"error": "rejected", "message": "Your account registration was rejected by the admin."}
-    
+        return {
+            "error": "rejected",
+            "message": "Your account registration was rejected by the admin.",
+        }
+
     # Set session
     session["user_id"] = user["id"]
     session["user_name"] = user["name"]
@@ -104,14 +110,20 @@ def require_login(f: Callable) -> Callable:
     """Decorator: redirect to login if not authenticated.
     For JSON endpoints, returns 401 instead.
     """
+
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get("user_id"):
             # Check if it's an API/JSON request
-            if request.is_json or request.path.startswith("/api/") or request.path.startswith("/admin/"):
+            if (
+                request.is_json
+                or request.path.startswith("/api/")
+                or request.path.startswith("/admin/")
+            ):
                 return jsonify({"error": "Authentication required"}), 401
             return redirect(url_for("login_page"))
         return f(*args, **kwargs)
+
     return decorated
 
 
@@ -119,17 +131,27 @@ def require_admin(f: Callable) -> Callable:
     """Decorator: require admin role.
     For JSON/API endpoints, returns 401/403 instead of redirecting.
     """
+
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get("user_id"):
-            if request.is_json or request.path.startswith("/api/") or request.path.startswith("/admin/"):
+            if (
+                request.is_json
+                or request.path.startswith("/api/")
+                or request.path.startswith("/admin/")
+            ):
                 return jsonify({"error": "Authentication required"}), 401
             return redirect(url_for("login_page"))
         if session.get("user_role") != "admin":
-            if request.is_json or request.path.startswith("/api/") or request.path.startswith("/admin/"):
+            if (
+                request.is_json
+                or request.path.startswith("/api/")
+                or request.path.startswith("/admin/")
+            ):
                 return jsonify({"error": "Admin access required"}), 403
             return "Admin access required", 403
         return f(*args, **kwargs)
+
     return decorated
 
 
@@ -158,8 +180,14 @@ def ensure_admin_exists():
     - Ensures existing admin account is active with correct role.
     """
     init_db()
-    from .database import update_user_email, update_user_name, delete_user, update_user_role, update_user_status
-    
+    from .database import (
+        delete_user,
+        update_user_email,
+        update_user_name,
+        update_user_role,
+        update_user_status,
+    )
+
     # Migration: check if old admin email exists and update it
     old_admin_emails = ["admin@jobagent.com"]
     for old_email in old_admin_emails:
@@ -173,8 +201,10 @@ def ensure_admin_exists():
                 else:
                     update_user_email(old_admin["id"], DEFAULT_ADMIN_EMAIL)
                     update_user_name(old_admin["id"], DEFAULT_ADMIN_NAME)
-                    logger.info(f"Migrated admin from {old_email} to {DEFAULT_ADMIN_EMAIL}")
-    
+                    logger.info(
+                        f"Migrated admin from {old_email} to {DEFAULT_ADMIN_EMAIL}"
+                    )
+
     # Check if the admin account exists but has wrong status/role
     admin = get_user_by_email(DEFAULT_ADMIN_EMAIL)
     if admin:
@@ -188,11 +218,15 @@ def ensure_admin_exists():
             update_user_status(admin["id"], "active")
             logger.info(f"Activated admin account: {DEFAULT_ADMIN_EMAIL}")
         return
-    
+
     pw_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
-    result = create_user(DEFAULT_ADMIN_EMAIL, pw_hash, DEFAULT_ADMIN_NAME, role="admin", status="active")
+    result = create_user(
+        DEFAULT_ADMIN_EMAIL, pw_hash, DEFAULT_ADMIN_NAME, role="admin", status="active"
+    )
     if result:
-        logger.info(f"Default admin created: {DEFAULT_ADMIN_EMAIL} / {DEFAULT_ADMIN_PASSWORD}")
+        logger.info(
+            f"Default admin created: {DEFAULT_ADMIN_EMAIL} / {DEFAULT_ADMIN_PASSWORD}"
+        )
     else:
         logger.warning("Failed to create default admin")
 

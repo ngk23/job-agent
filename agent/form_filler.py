@@ -14,12 +14,12 @@ from typing import Any, Dict, List, Optional
 
 from playwright.async_api import Page
 
-from .openrouter_client import LLMClient, VISION_MODEL
-
+from .openrouter_client import VISION_MODEL, LLMClient
 
 # ============================================================
 # DATA MODELS
 # ============================================================
+
 
 class FieldType(Enum):
     TEXT = "text"
@@ -77,6 +77,7 @@ class AnalysisResult:
 # PROFILE MAPPING
 # ============================================================
 
+
 def map_profile_to_form_filler(profile: Dict[str, Any]) -> Dict[str, Any]:
     """Map the existing project's profile.json format to the form filler's expected format."""
     education = profile.get("education", {})
@@ -86,23 +87,45 @@ def map_profile_to_form_filler(profile: Dict[str, Any]) -> Dict[str, Any]:
     work_history = []
     exp_summary = profile.get("experience_summary", "")
     if exp_summary:
-        work_history.append({"company": profile.get("current_company", ""), "role": profile.get("current_title", ""), "duration": "Present"})
+        work_history.append(
+            {
+                "company": profile.get("current_company", ""),
+                "role": profile.get("current_title", ""),
+                "duration": "Present",
+            }
+        )
 
     # Build education string
     edu_parts = []
     if education.get("degree"):
-        edu_parts.append(f"{education.get('degree')} — {education.get('school', '')} ({education.get('year', '')})")
+        edu_parts.append(
+            f"{education.get('degree')} — {education.get('school', '')} ({education.get('year', '')})"
+        )
     if bachelor.get("degree"):
-        edu_parts.append(f"{bachelor.get('degree')} — {bachelor.get('school', '')} ({bachelor.get('year', '')})")
+        edu_parts.append(
+            f"{bachelor.get('degree')} — {bachelor.get('school', '')} ({bachelor.get('year', '')})"
+        )
     education_str = "; ".join(edu_parts) if edu_parts else ""
 
     return {
-        "first_name": profile.get("name", "").split()[1] if len(profile.get("name", "").split()) > 1 else profile.get("name", ""),
-        "last_name": profile.get("name", "").split()[0] if len(profile.get("name", "").split()) > 0 else "",
+        "first_name": (
+            profile.get("name", "").split()[1]
+            if len(profile.get("name", "").split()) > 1
+            else profile.get("name", "")
+        ),
+        "last_name": (
+            profile.get("name", "").split()[0]
+            if len(profile.get("name", "").split()) > 0
+            else ""
+        ),
         "full_name": profile.get("name", ""),
         "email": profile.get("email", ""),
         "phone": profile.get("phone", ""),
-        "country": profile.get("address", "").split(",")[-1].strip() if profile.get("address") else "",
+        "country": (
+            profile.get("address", "").split(",")[-1].strip()
+            if profile.get("address")
+            else ""
+        ),
         "experience": profile.get("experience_summary", ""),
         "skills": profile.get("skills", []),
         "resume_path": profile.get("resume_path", ""),
@@ -118,6 +141,7 @@ def map_profile_to_form_filler(profile: Dict[str, Any]) -> Dict[str, Any]:
 # ============================================================
 # FORM ANALYZER
 # ============================================================
+
 
 class FormAnalyzer:
     """Analyzes job application forms using LLM vision + DOM parsing."""
@@ -164,153 +188,345 @@ class FormAnalyzer:
         """
         return {
             # ── Name variants ──
-            "first name": "first_name", "firstname": "first_name", "first_name": "first_name",
-            "first": "first_name", "given name": "first_name", "givenname": "first_name",
-            "forename": "first_name", "given": "first_name", "preferred name": "first_name",
-            "legal first name": "first_name", "first legal name": "first_name",
-            "last name": "last_name", "lastname": "last_name", "last_name": "last_name",
-            "last": "last_name", "surname": "last_name", "family name": "last_name",
-            "familyname": "last_name", "sur name": "last_name", "second name": "last_name",
-            "legal last name": "last_name", "last legal name": "last_name",
-            "full name": "full_name", "fullname": "full_name", "name": "full_name",
-            "legal name": "full_name", "complete name": "full_name", "applicant name": "full_name",
-            "candidate name": "full_name", "your name": "full_name", "contact name": "full_name",
+            "first name": "first_name",
+            "firstname": "first_name",
+            "first_name": "first_name",
+            "first": "first_name",
+            "given name": "first_name",
+            "givenname": "first_name",
+            "forename": "first_name",
+            "given": "first_name",
+            "preferred name": "first_name",
+            "legal first name": "first_name",
+            "first legal name": "first_name",
+            "last name": "last_name",
+            "lastname": "last_name",
+            "last_name": "last_name",
+            "last": "last_name",
+            "surname": "last_name",
+            "family name": "last_name",
+            "familyname": "last_name",
+            "sur name": "last_name",
+            "second name": "last_name",
+            "legal last name": "last_name",
+            "last legal name": "last_name",
+            "full name": "full_name",
+            "fullname": "full_name",
+            "name": "full_name",
+            "legal name": "full_name",
+            "complete name": "full_name",
+            "applicant name": "full_name",
+            "candidate name": "full_name",
+            "your name": "full_name",
+            "contact name": "full_name",
             # ── Email variants ──
-            "email": "email", "e-mail": "email", "email address": "email",
-            "e mail": "email", "e mail address": "email", "e-mail address": "email",
-            "email id": "email", "e-mail id": "email", "contact email": "email",
-            "work email": "email", "personal email": "email", "email (primary)": "email",
-            "primary email": "email", "email address (primary)": "email",
+            "email": "email",
+            "e-mail": "email",
+            "email address": "email",
+            "e mail": "email",
+            "e mail address": "email",
+            "e-mail address": "email",
+            "email id": "email",
+            "e-mail id": "email",
+            "contact email": "email",
+            "work email": "email",
+            "personal email": "email",
+            "email (primary)": "email",
+            "primary email": "email",
+            "email address (primary)": "email",
             # ── Phone variants ──
-            "phone": "phone", "telephone": "phone", "mobile": "phone", "cell": "phone",
-            "phone number": "phone", "telephone number": "phone", "mobile number": "phone",
-            "cell phone": "phone", "mobile phone": "phone", "contact number": "phone",
-            "contact phone": "phone", "phone no": "phone", "phone no.": "phone",
-            "tel": "phone", "tel no": "phone", "daytime phone": "phone",
-            "evening phone": "phone", "home phone": "phone", "work phone": "phone",
-            "primary phone": "phone", "phone (primary)": "phone", "cell number": "phone",
-            "whatsapp number": "phone", "whatsapp": "phone",
+            "phone": "phone",
+            "telephone": "phone",
+            "mobile": "phone",
+            "cell": "phone",
+            "phone number": "phone",
+            "telephone number": "phone",
+            "mobile number": "phone",
+            "cell phone": "phone",
+            "mobile phone": "phone",
+            "contact number": "phone",
+            "contact phone": "phone",
+            "phone no": "phone",
+            "phone no.": "phone",
+            "tel": "phone",
+            "tel no": "phone",
+            "daytime phone": "phone",
+            "evening phone": "phone",
+            "home phone": "phone",
+            "work phone": "phone",
+            "primary phone": "phone",
+            "phone (primary)": "phone",
+            "cell number": "phone",
+            "whatsapp number": "phone",
+            "whatsapp": "phone",
             # ── Location / Country variants ──
-            "country": "country", "location": "country", "city": "country",
-            "state": "country", "province": "country", "region": "country",
-            "country of residence": "country", "current location": "country",
-            "where are you located": "country", "where are you based": "country",
-            "your location": "country", "residence": "country", "nationality": "country",
-            "postal code": "country", "zip code": "country", "zip": "country",
-            "postcode": "country", "city/state": "country", "state/province": "country",
+            "country": "country",
+            "location": "country",
+            "city": "country",
+            "state": "country",
+            "province": "country",
+            "region": "country",
+            "country of residence": "country",
+            "current location": "country",
+            "where are you located": "country",
+            "where are you based": "country",
+            "your location": "country",
+            "residence": "country",
+            "nationality": "country",
+            "postal code": "country",
+            "zip code": "country",
+            "zip": "country",
+            "postcode": "country",
+            "city/state": "country",
+            "state/province": "country",
             # ── Experience variants ──
-            "experience": "experience", "years of experience": "experience",
-            "total experience": "experience", "relevant experience": "experience",
-            "work experience": "experience", "professional experience": "experience",
-            "employment history": "experience", "work history": "experience",
-            "career history": "experience", "professional background": "experience",
-            "total years of experience": "experience", "overall experience": "experience",
-            "years experience": "experience", "yrs of experience": "experience",
-            "experience (years)": "experience", "experience in years": "experience",
-            "how many years of experience": "experience", "years of work experience": "experience",
-            "professional summary": "experience", "career summary": "experience",
-            "professional overview": "experience", "background": "experience",
+            "experience": "experience",
+            "years of experience": "experience",
+            "total experience": "experience",
+            "relevant experience": "experience",
+            "work experience": "experience",
+            "professional experience": "experience",
+            "employment history": "experience",
+            "work history": "experience",
+            "career history": "experience",
+            "professional background": "experience",
+            "total years of experience": "experience",
+            "overall experience": "experience",
+            "years experience": "experience",
+            "yrs of experience": "experience",
+            "experience (years)": "experience",
+            "experience in years": "experience",
+            "how many years of experience": "experience",
+            "years of work experience": "experience",
+            "professional summary": "experience",
+            "career summary": "experience",
+            "professional overview": "experience",
+            "background": "experience",
             # ── Skills variants ──
-            "skills": "skills", "technical skills": "skills", "key skills": "skills",
-            "core skills": "skills", "primary skills": "skills", "relevant skills": "skills",
-            "skill set": "skills", "skillset": "skills", "skill": "skills",
-            "competencies": "skills", "core competencies": "skills", "key competencies": "skills",
-            "areas of expertise": "skills", "expertise": "skills", "proficiencies": "skills",
-            "technologies": "skills", "programming languages": "skills",
-            "languages": "skills", "technical expertise": "skills",
-            "it skills": "skills", "computer skills": "skills", "tech skills": "skills",
-            "what skills do you have": "skills", "list your skills": "skills",
+            "skills": "skills",
+            "technical skills": "skills",
+            "key skills": "skills",
+            "core skills": "skills",
+            "primary skills": "skills",
+            "relevant skills": "skills",
+            "skill set": "skills",
+            "skillset": "skills",
+            "skill": "skills",
+            "competencies": "skills",
+            "core competencies": "skills",
+            "key competencies": "skills",
+            "areas of expertise": "skills",
+            "expertise": "skills",
+            "proficiencies": "skills",
+            "technologies": "skills",
+            "programming languages": "skills",
+            "languages": "skills",
+            "technical expertise": "skills",
+            "it skills": "skills",
+            "computer skills": "skills",
+            "tech skills": "skills",
+            "what skills do you have": "skills",
+            "list your skills": "skills",
             # ── Resume / CV variants ──
-            "resume": "resume_path", "cv": "resume_path", "upload resume": "resume_path",
-            "upload cv": "resume_path", "attach resume": "resume_path", "attach cv": "resume_path",
-            "resume/cv": "resume_path", "curriculum vitae": "resume_path",
-            "résumé": "resume_path", "resume upload": "resume_path", "cv upload": "resume_path",
-            "upload your cv": "resume_path", "upload your resume": "resume_path",
-            "attach your resume": "resume_path", "attach your cv": "resume_path",
-            "drop your resume": "resume_path", "drop your cv": "resume_path",
-            "upload file": "resume_path", "file upload": "resume_path",
-            "choose file": "resume_path", "browse": "resume_path", "select file": "resume_path",
+            "resume": "resume_path",
+            "cv": "resume_path",
+            "upload resume": "resume_path",
+            "upload cv": "resume_path",
+            "attach resume": "resume_path",
+            "attach cv": "resume_path",
+            "resume/cv": "resume_path",
+            "curriculum vitae": "resume_path",
+            "résumé": "resume_path",
+            "resume upload": "resume_path",
+            "cv upload": "resume_path",
+            "upload your cv": "resume_path",
+            "upload your resume": "resume_path",
+            "attach your resume": "resume_path",
+            "attach your cv": "resume_path",
+            "drop your resume": "resume_path",
+            "drop your cv": "resume_path",
+            "upload file": "resume_path",
+            "file upload": "resume_path",
+            "choose file": "resume_path",
+            "browse": "resume_path",
+            "select file": "resume_path",
             # ── Cover letter variants ──
-            "cover letter": "cover_letter", "coverletter": "cover_letter",
-            "cover note": "cover_letter", "covering letter": "cover_letter",
-            "personal statement": "cover_letter", "statement of interest": "cover_letter",
-            "letter of interest": "cover_letter", "motivation letter": "cover_letter",
-            "why should we hire you": "cover_letter", "tell us about yourself": "cover_letter",
-            "about yourself": "cover_letter", "introduce yourself": "cover_letter",
-            "brief introduction": "cover_letter", "tell us why you're a good fit": "cover_letter",
-            "what makes you a good fit": "cover_letter", "why are you a good fit": "cover_letter",
-            "anything else we should know": "cover_letter", "additional information": "cover_letter",
+            "cover letter": "cover_letter",
+            "coverletter": "cover_letter",
+            "cover note": "cover_letter",
+            "covering letter": "cover_letter",
+            "personal statement": "cover_letter",
+            "statement of interest": "cover_letter",
+            "letter of interest": "cover_letter",
+            "motivation letter": "cover_letter",
+            "why should we hire you": "cover_letter",
+            "tell us about yourself": "cover_letter",
+            "about yourself": "cover_letter",
+            "introduce yourself": "cover_letter",
+            "brief introduction": "cover_letter",
+            "tell us why you're a good fit": "cover_letter",
+            "what makes you a good fit": "cover_letter",
+            "why are you a good fit": "cover_letter",
+            "anything else we should know": "cover_letter",
+            "additional information": "cover_letter",
             # ── Why join variants ──
-            "why do you want to join": "why_join", "why join": "why_join",
-            "why us": "why_join", "why this company": "why_join",
-            "why are you interested": "why_join", "motivation": "why_join",
-            "why do you want to work here": "why_join", "why this role": "why_join",
-            "why are you applying": "why_join", "why do you want this job": "why_join",
-            "reason for applying": "why_join", "interest in this position": "why_join",
+            "why do you want to join": "why_join",
+            "why join": "why_join",
+            "why us": "why_join",
+            "why this company": "why_join",
+            "why are you interested": "why_join",
+            "motivation": "why_join",
+            "why do you want to work here": "why_join",
+            "why this role": "why_join",
+            "why are you applying": "why_join",
+            "why do you want this job": "why_join",
+            "reason for applying": "why_join",
+            "interest in this position": "why_join",
             "what interests you about this role": "why_join",
             # ── Work history / Company variants ──
-            "company": "work_history", "employer": "work_history",
-            "current company": "work_history", "current employer": "work_history",
-            "most recent company": "work_history", "current organization": "work_history",
-            "organization": "work_history", "organisation": "work_history",
-            "previous company": "work_history", "previous employer": "work_history",
-            "last company": "work_history", "current workplace": "work_history",
-            "role": "work_history", "job title": "work_history", "position": "work_history",
-            "current role": "work_history", "current position": "work_history",
-            "current job title": "work_history", "designation": "work_history",
-            "current designation": "work_history", "title": "work_history",
-            "most recent role": "work_history", "occupation": "work_history",
-            "current occupation": "work_history", "job role": "work_history",
+            "company": "work_history",
+            "employer": "work_history",
+            "current company": "work_history",
+            "current employer": "work_history",
+            "most recent company": "work_history",
+            "current organization": "work_history",
+            "organization": "work_history",
+            "organisation": "work_history",
+            "previous company": "work_history",
+            "previous employer": "work_history",
+            "last company": "work_history",
+            "current workplace": "work_history",
+            "role": "work_history",
+            "job title": "work_history",
+            "position": "work_history",
+            "current role": "work_history",
+            "current position": "work_history",
+            "current job title": "work_history",
+            "designation": "work_history",
+            "current designation": "work_history",
+            "title": "work_history",
+            "most recent role": "work_history",
+            "occupation": "work_history",
+            "current occupation": "work_history",
+            "job role": "work_history",
             # ── Education variants ──
-            "education": "education", "degree": "education", "qualification": "education",
-            "education level": "education", "highest education": "education",
-            "educational qualification": "education", "academic qualification": "education",
-            "educational background": "education", "academic background": "education",
-            "highest degree": "education", "highest qualification": "education",
-            "university": "education", "college": "education", "school": "education",
-            "institution": "education", "education institution": "education",
-            "educational institution": "education", "academic institution": "education",
-            "alma mater": "education", "university/college": "education",
-            "college/university": "education", "institute": "education",
-            "university name": "education", "college name": "education",
-            "school name": "education", "degree level": "education",
-            "level of education": "education", "qualification level": "education",
-            "graduation": "education", "post graduation": "education",
-            "undergraduate": "education", "postgraduate": "education",
-            "bachelor": "education", "master": "education", "doctorate": "education",
-            "phd": "education", "mba": "education", "bachelor's": "education",
-            "master's": "education", "academics": "education", "edu": "education",
+            "education": "education",
+            "degree": "education",
+            "qualification": "education",
+            "education level": "education",
+            "highest education": "education",
+            "educational qualification": "education",
+            "academic qualification": "education",
+            "educational background": "education",
+            "academic background": "education",
+            "highest degree": "education",
+            "highest qualification": "education",
+            "university": "education",
+            "college": "education",
+            "school": "education",
+            "institution": "education",
+            "education institution": "education",
+            "educational institution": "education",
+            "academic institution": "education",
+            "alma mater": "education",
+            "university/college": "education",
+            "college/university": "education",
+            "institute": "education",
+            "university name": "education",
+            "college name": "education",
+            "school name": "education",
+            "degree level": "education",
+            "level of education": "education",
+            "qualification level": "education",
+            "graduation": "education",
+            "post graduation": "education",
+            "undergraduate": "education",
+            "postgraduate": "education",
+            "bachelor": "education",
+            "master": "education",
+            "doctorate": "education",
+            "phd": "education",
+            "mba": "education",
+            "bachelor's": "education",
+            "master's": "education",
+            "academics": "education",
+            "edu": "education",
             # ── LinkedIn variants ──
-            "linkedin": "linkedin", "linkedin profile": "linkedin", "linked in": "linkedin",
-            "linkedin url": "linkedin", "linkedin link": "linkedin",
-            "linkedin profile url": "linkedin", "social profile": "linkedin",
-            "professional profile": "linkedin", "linkedin (optional)": "linkedin",
+            "linkedin": "linkedin",
+            "linkedin profile": "linkedin",
+            "linked in": "linkedin",
+            "linkedin url": "linkedin",
+            "linkedin link": "linkedin",
+            "linkedin profile url": "linkedin",
+            "social profile": "linkedin",
+            "professional profile": "linkedin",
+            "linkedin (optional)": "linkedin",
             # ── Portfolio / Website variants ──
-            "portfolio": "portfolio", "website": "portfolio", "github": "portfolio",
-            "portfolio url": "portfolio", "portfolio website": "portfolio",
-            "personal website": "portfolio", "personal site": "portfolio",
-            "github profile": "portfolio", "github url": "portfolio", "gitlab": "portfolio",
-            "online portfolio": "portfolio", "web portfolio": "portfolio",
-            "project link": "portfolio", "demo link": "portfolio",
-            "website/portfolio": "portfolio", "portfolio/website": "portfolio",
-            "behance": "portfolio", "dribbble": "portfolio", "codepen": "portfolio",
+            "portfolio": "portfolio",
+            "website": "portfolio",
+            "github": "portfolio",
+            "portfolio url": "portfolio",
+            "portfolio website": "portfolio",
+            "personal website": "portfolio",
+            "personal site": "portfolio",
+            "github profile": "portfolio",
+            "github url": "portfolio",
+            "gitlab": "portfolio",
+            "online portfolio": "portfolio",
+            "web portfolio": "portfolio",
+            "project link": "portfolio",
+            "demo link": "portfolio",
+            "website/portfolio": "portfolio",
+            "portfolio/website": "portfolio",
+            "behance": "portfolio",
+            "dribbble": "portfolio",
+            "codepen": "portfolio",
             # ── Fields to ALWAYS skip (privacy/discrimination) ──
-            "salary": "skip", "expected salary": "skip", "current salary": "skip",
-            "desired salary": "skip", "salary expectations": "skip", "salary expectation": "skip",
-            "compensation": "skip", "expected ctc": "skip", "current ctc": "skip",
-            "ctc": "skip", "pay": "skip", "rate": "skip", "hourly rate": "skip",
-            "salary range": "skip", "salary requirement": "skip",
-            "gender": "skip", "age": "skip", "date of birth": "skip",
-            "dob": "skip", "birth date": "skip", "birthday": "skip",
-            "race": "skip", "ethnicity": "skip", "disability": "skip",
-            "marital status": "skip", "religion": "skip", "veteran status": "skip",
-            "ssn": "skip", "social security": "skip", "passport number": "skip",
-            "national id": "skip", "driver license": "skip",
-            "criminal record": "skip", "felony": "skip",
+            "salary": "skip",
+            "expected salary": "skip",
+            "current salary": "skip",
+            "desired salary": "skip",
+            "salary expectations": "skip",
+            "salary expectation": "skip",
+            "compensation": "skip",
+            "expected ctc": "skip",
+            "current ctc": "skip",
+            "ctc": "skip",
+            "pay": "skip",
+            "rate": "skip",
+            "hourly rate": "skip",
+            "salary range": "skip",
+            "salary requirement": "skip",
+            "gender": "skip",
+            "age": "skip",
+            "date of birth": "skip",
+            "dob": "skip",
+            "birth date": "skip",
+            "birthday": "skip",
+            "race": "skip",
+            "ethnicity": "skip",
+            "disability": "skip",
+            "marital status": "skip",
+            "religion": "skip",
+            "veteran status": "skip",
+            "ssn": "skip",
+            "social security": "skip",
+            "passport number": "skip",
+            "national id": "skip",
+            "driver license": "skip",
+            "criminal record": "skip",
+            "felony": "skip",
         }
 
     def _normalize_label(self, label: str) -> str:
-        return label.lower().strip().replace("?", "").replace("*", "").replace(":", "").strip()
+        return (
+            label.lower()
+            .strip()
+            .replace("?", "")
+            .replace("*", "")
+            .replace(":", "")
+            .strip()
+        )
 
     # ── Profile key categories for AI classification ──
     _PROFILE_CATEGORIES = {
@@ -372,15 +588,15 @@ Category key:"""
             response = await self.llm.chat_text(prompt, max_tokens=20)
             result = response.strip().lower()
             # Strip any quotes or extra text
-            result = result.strip('"\'').split('\n')[0].strip()
-            
+            result = result.strip("\"'").split("\n")[0].strip()
+
             if result == "skip":
                 self._ai_match_cache[normalized] = None
                 return None
             if result in self._PROFILE_CATEGORIES:
                 self._ai_match_cache[normalized] = result
                 return result
-            
+
             # If the LLM returned something unexpected, cache as None to avoid retrying
             self._ai_match_cache[normalized] = None
             return None
@@ -433,20 +649,33 @@ Category key:"""
         return None, 0.0
 
     def _determine_action(
-        self, field_type: FieldType, confidence: float, required: bool, visible: bool, label: str
+        self,
+        field_type: FieldType,
+        confidence: float,
+        required: bool,
+        visible: bool,
+        label: str,
     ) -> tuple:
         """Returns (action, reason)."""
         if not visible:
-            return ActionType.REVEAL, "Field not visible, may need interaction to reveal"
+            return (
+                ActionType.REVEAL,
+                "Field not visible, may need interaction to reveal",
+            )
 
         if field_type == FieldType.CAPTCHA:
             return ActionType.PAUSE_USER, "CAPTCHA requires human verification"
 
-        if field_type == FieldType.BUTTON and any(word in label.lower() for word in ["add", "new", "+", "more"]):
+        if field_type == FieldType.BUTTON and any(
+            word in label.lower() for word in ["add", "new", "+", "more"]
+        ):
             return ActionType.CLICK, "Button to reveal additional fields"
 
         if field_type == FieldType.SUBMIT:
-            return ActionType.CLICK, "Submit button — will ask for confirmation before clicking"
+            return (
+                ActionType.CLICK,
+                "Submit button — will ask for confirmation before clicking",
+            )
 
         if field_type in [FieldType.SELECT, FieldType.RADIO, FieldType.CHECKBOX]:
             return ActionType.SELECT, "Selection field"
@@ -455,7 +684,10 @@ Category key:"""
             return ActionType.UPLOAD, "File upload required"
 
         if confidence < 0.5 and required:
-            return ActionType.PAUSE_USER, f"Unknown required field: '{label}' - needs human input"
+            return (
+                ActionType.PAUSE_USER,
+                f"Unknown required field: '{label}' - needs human input",
+            )
 
         if confidence < 0.3 and not required:
             return ActionType.SKIP, f"Unknown optional field: '{label}' - skipping"
@@ -480,7 +712,13 @@ Category key:"""
         except Exception as e:
             print(f"  [WARN] Failed to parse LLM response: {e}")
             print(f"  Raw response: {response[:500]}")
-            parsed = {"fields": [], "has_captcha": False, "has_submit": False, "is_multi_step": False, "notes": ""}
+            parsed = {
+                "fields": [],
+                "has_captcha": False,
+                "has_submit": False,
+                "is_multi_step": False,
+                "notes": "",
+            }
 
         # Convert to FormField objects
         analyzed_fields = []
@@ -500,7 +738,9 @@ Category key:"""
                 print(f"  [AI-MATCH] '{label}' → {profile_key} (AI-classified)")
 
             # Determine action
-            action, reason = self._determine_action(field_type, confidence, required, visible, label)
+            action, reason = self._determine_action(
+                field_type, confidence, required, visible, label
+            )
 
             field = FormField(
                 selector=raw.get("selector", ""),
@@ -518,17 +758,25 @@ Category key:"""
             analyzed_fields.append(field)
             total_confidence += confidence
 
-        avg_confidence = total_confidence / len(analyzed_fields) if analyzed_fields else 1.0
+        avg_confidence = (
+            total_confidence / len(analyzed_fields) if analyzed_fields else 1.0
+        )
 
-        has_captcha = parsed.get("has_captcha", False) or any(f.field_type == FieldType.CAPTCHA for f in analyzed_fields)
-        has_submit = parsed.get("has_submit", False) or any(f.field_type == FieldType.SUBMIT for f in analyzed_fields)
+        has_captcha = parsed.get("has_captcha", False) or any(
+            f.field_type == FieldType.CAPTCHA for f in analyzed_fields
+        )
+        has_submit = parsed.get("has_submit", False) or any(
+            f.field_type == FieldType.SUBMIT for f in analyzed_fields
+        )
 
         if has_captcha:
             recommendation = "CAPTCHA detected. Agent will pause for user intervention."
         elif avg_confidence < 0.5:
             recommendation = "Low confidence in field mapping. Agent will highlight uncertain fields."
         else:
-            recommendation = "High confidence. Agent will auto-fill with user supervision."
+            recommendation = (
+                "High confidence. Agent will auto-fill with user supervision."
+            )
 
         return AnalysisResult(
             fields=analyzed_fields,
@@ -584,7 +832,7 @@ Category key:"""
         response = await self.llm.chat_text(prompt)
 
         try:
-            parsed = json.loads(response[response.find("{"): response.rfind("}") + 1])
+            parsed = json.loads(response[response.find("{") : response.rfind("}") + 1])
         except Exception:
             parsed = {"fields": [], "has_captcha": False, "has_submit": False}
 
@@ -596,13 +844,16 @@ Category key:"""
 # FORM FILLER
 # ============================================================
 
+
 class FormFiller:
     """Executes form filling actions using Playwright."""
 
     def __init__(self, page: Page, analyzer: FormAnalyzer, auto_submit: bool = False):
         self.page = page
         self.analyzer = analyzer
-        self.auto_submit = auto_submit  # If True, submit without confirmation (headless/CI mode)
+        self.auto_submit = (
+            auto_submit  # If True, submit without confirmation (headless/CI mode)
+        )
         self.log: List[str] = []
         self.errors: List[str] = []
         self.user_interventions: List[str] = []
@@ -641,7 +892,9 @@ class FormFiller:
             for opt in options:
                 if value.lower() in opt.lower() or opt.lower() in value.lower():
                     await self.page.select_option(field.selector, opt)
-                    self.log.append(f"  [OK] Selected '{opt}' (matched '{value}') for '{field.label}'")
+                    self.log.append(
+                        f"  [OK] Selected '{opt}' (matched '{value}') for '{field.label}'"
+                    )
                     return True
 
             self.errors.append(f"Could not match '{value}' to options {options}")
@@ -721,9 +974,11 @@ class FormFiller:
 
         # Confirm submission
         is_interactive = sys.stdout.isatty() and not self.auto_submit
-        
+
         if self.auto_submit or not is_interactive:
-            self.log.append(f"  Auto-submit mode: clicking '{field.label}' without confirmation")
+            self.log.append(
+                f"  Auto-submit mode: clicking '{field.label}' without confirmation"
+            )
             print(f"\n  [AUTO-SUBMIT] Clicking '{field.label}'...")
         else:
             print(f"\n  {'─' * 50}")
@@ -734,7 +989,7 @@ class FormFiller:
                 print(f"  ⚠ Errors: {error_count} — review above")
             print(f"\n  Press Enter to submit, or type 's' to skip submission...")
             user_input = input().strip().lower()
-            if user_input == 's':
+            if user_input == "s":
                 self.log.append(f"  [SKIP] User chose to skip submission")
                 self.user_interventions.append(f"User skipped submission")
                 return False
@@ -742,7 +997,9 @@ class FormFiller:
         # Click the submit button
         try:
             await self.page.click(field.selector)
-            self.log.append(f"  [SUBMIT] ✅ Clicked '{field.label}' — application submitted!")
+            self.log.append(
+                f"  [SUBMIT] ✅ Clicked '{field.label}' — application submitted!"
+            )
             self._submitted = True
             await asyncio.sleep(2)  # Wait for submission response
             return True
@@ -839,6 +1096,7 @@ class FormFiller:
 # MAIN AGENT
 # ============================================================
 
+
 class JobApplicationAgent:
     """Main orchestrator: opens form, auto-fills with supervision."""
 
@@ -848,9 +1106,11 @@ class JobApplicationAgent:
         self.profile = profile
         self.results: List[Dict] = []
 
-    async def apply_to_job(self, job_url: str, headless: bool = False, auto_submit: bool = False) -> Dict:
+    async def apply_to_job(
+        self, job_url: str, headless: bool = False, auto_submit: bool = False
+    ) -> Dict:
         """Apply to a single job.
-        
+
         Args:
             job_url: URL of the job application form
             headless: Run browser in headless mode
@@ -860,9 +1120,13 @@ class JobApplicationAgent:
         if auto_submit:
             print(f"  [AGENT] Auto-submit mode: will submit without confirmation")
         elif not headless:
-            print(f"  [AGENT] Interactive mode: you'll be asked to confirm before submission")
+            print(
+                f"  [AGENT] Interactive mode: you'll be asked to confirm before submission"
+            )
 
-        from playwright.async_api import async_playwright  # lazy import to avoid top-level dep issues
+        from playwright.async_api import (  # lazy import to avoid top-level dep issues
+            async_playwright,
+        )
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=headless)
@@ -884,7 +1148,9 @@ class JobApplicationAgent:
 
                 # If multi-step, handle next steps
                 if result["analysis"].is_multi_step:
-                    print("\n  [AGENT] Multi-step form detected. Taking another screenshot...")
+                    print(
+                        "\n  [AGENT] Multi-step form detected. Taking another screenshot..."
+                    )
                     await asyncio.sleep(2)
                     screenshot2 = await page.screenshot()
                     filler2 = FormFiller(page, self.analyzer, auto_submit=auto_submit)
@@ -893,7 +1159,9 @@ class JobApplicationAgent:
 
                 # Keep browser open for user review
                 if not headless:
-                    print("\n  [AGENT] Browser kept open for review. Press Enter to close...")
+                    print(
+                        "\n  [AGENT] Browser kept open for review. Press Enter to close..."
+                    )
                     input()
 
                 return result

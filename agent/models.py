@@ -4,12 +4,13 @@ Data models for Job Agent.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
 from enum import Enum
+from typing import List, Optional
 
 
 class Platform(Enum):
     """Supported job platforms."""
+
     LINKEDIN = "linkedin"
     INDEED = "indeed"
     GLASSDOOR = "glassdoor"
@@ -22,23 +23,28 @@ class Platform(Enum):
 @dataclass
 class Job:
     """Represents a job listing."""
+
     title: str
     company: str
     url: str
     platform: Platform = Platform.UNKNOWN
     location: str = ""
     description: str = ""
-    
+
     def to_dict(self) -> dict:
         return {
             "title": self.title,
             "company": self.company,
             "url": self.url,
-            "platform": self.platform.value if isinstance(self.platform, Platform) else self.platform,
+            "platform": (
+                self.platform.value
+                if isinstance(self.platform, Platform)
+                else self.platform
+            ),
             "location": self.location,
             "description": self.description,
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> "Job":
         platform = data.get("platform", "unknown")
@@ -60,11 +66,12 @@ class Job:
 @dataclass
 class AIResult:
     """Result from AI cover letter tailoring."""
+
     match_score: int
     matching_skills: List[str] = field(default_factory=list)
     concerns: List[str] = field(default_factory=list)
     cover_letter: str = ""
-    
+
     def to_dict(self) -> dict:
         return {
             "match_score": self.match_score,
@@ -72,7 +79,7 @@ class AIResult:
             "concerns": self.concerns,
             "cover_letter": self.cover_letter,
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> "AIResult":
         return cls(
@@ -86,13 +93,14 @@ class AIResult:
 @dataclass
 class ApplicationResult:
     """Result of a job application attempt."""
+
     timestamp: str
     job: Job
     ai_score: int
     matching_skills: List[str] = field(default_factory=list)
     concerns: List[str] = field(default_factory=list)
     cover_letter: str = ""
-    
+
     def to_dict(self) -> dict:
         return {
             "timestamp": self.timestamp,
@@ -102,7 +110,7 @@ class ApplicationResult:
             "concerns": self.concerns,
             "cover_letter": self.cover_letter,
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> "ApplicationResult":
         job_data = data.get("job", {})

@@ -5,21 +5,22 @@ Tests that the route handles auth, validation, marking, and duplicates correctly
 
 import json
 import os
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
 
 # Set DATA_DIR before any agent module imports so DB_PATH picks it up
 _tmp_data_dir = tempfile.mkdtemp()
 os.environ["DATA_DIR"] = _tmp_data_dir
 
-from agent.config import AppConfig
-from agent.dashboard import create_dashboard_app
-
-
 # Clean up temp directory on exit
 import atexit
 import shutil
+
+from agent.config import AppConfig
+from agent.dashboard import create_dashboard_app
+
 atexit.register(shutil.rmtree, _tmp_data_dir, ignore_errors=True)
 
 
@@ -49,13 +50,21 @@ def _login(client, app):
         ensure_admin_exists()
         user = get_user_by_email("admin@admin.com")
         if not user:
-            from agent.database import get_db
             from werkzeug.security import generate_password_hash
+
+            from agent.database import get_db
+
             db = get_db()
             db.execute(
                 "INSERT OR IGNORE INTO users (email, password_hash, name, role, status) "
                 "VALUES (?, ?, ?, ?, ?)",
-                ("admin@admin.com", generate_password_hash("testpass123"), "Admin", "admin", "active"),
+                (
+                    "admin@admin.com",
+                    generate_password_hash("testpass123"),
+                    "Admin",
+                    "admin",
+                    "active",
+                ),
             )
             db.commit()
             user = get_user_by_email("admin@admin.com")
@@ -173,6 +182,7 @@ class TestMarkAppliedEndpoint:
 
         # Verify the URL is in the database
         from agent.database import get_db
+
         db = get_db()
         cursor = db.execute(
             "SELECT url FROM applied_jobs WHERE user_id = ? AND url = ?",
@@ -202,6 +212,7 @@ class TestMarkAppliedEndpoint:
 
         # Verify each URL is in the database for this user
         from agent.database import get_db
+
         db = get_db()
         for url in urls:
             cursor = db.execute(

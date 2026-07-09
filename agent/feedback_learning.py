@@ -1,12 +1,11 @@
-
 """Feedback learning module for Job Agent.
 Analyzes user feedback patterns and generates insights for agent self-improvement.
 """
 
 import json
 import logging
-from typing import Dict, List, Any
 from datetime import datetime, timedelta
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -81,31 +80,55 @@ def get_feedback_patterns(days: int = 30) -> Dict[str, Any]:
     insight_parts = []
 
     # Company insights
-    good_companies = {c: d for c, d in company_ratings.items()
-                      if d["up"] > d["down"] and d["total"] >= 2}
-    bad_companies = {c: d for c, d in company_ratings.items()
-                     if d["down"] >= d["up"] and d["total"] >= 2}
+    good_companies = {
+        c: d
+        for c, d in company_ratings.items()
+        if d["up"] > d["down"] and d["total"] >= 2
+    }
+    bad_companies = {
+        c: d
+        for c, d in company_ratings.items()
+        if d["down"] >= d["up"] and d["total"] >= 2
+    }
 
     if good_companies:
-        top = sorted(good_companies.items(), key=lambda x: x[1]["up"] / x[1]["total"], reverse=True)[:5]
-        companies_str = ", ".join(f"{c} ({d['up']}/{d['total']} positive)" for c, d in top)
+        top = sorted(
+            good_companies.items(),
+            key=lambda x: x[1]["up"] / x[1]["total"],
+            reverse=True,
+        )[:5]
+        companies_str = ", ".join(
+            f"{c} ({d['up']}/{d['total']} positive)" for c, d in top
+        )
         insight_parts.append(f"Preferred companies: {companies_str}")
 
     if bad_companies:
-        worst = sorted(bad_companies.items(), key=lambda x: x[1]["down"] / x[1]["total"], reverse=True)[:3]
-        companies_str = ", ".join(f"{c} ({d['down']}/{d['total']} negative)" for c, d in worst)
+        worst = sorted(
+            bad_companies.items(),
+            key=lambda x: x[1]["down"] / x[1]["total"],
+            reverse=True,
+        )[:3]
+        companies_str = ", ".join(
+            f"{c} ({d['down']}/{d['total']} negative)" for c, d in worst
+        )
         insight_parts.append(f"Companies to deprioritize: {companies_str}")
 
     # Skill insights
     if positive_skills:
-        insight_parts.append(f"Skills with positive feedback: {', '.join(sorted(positive_skills)[:10])}")
+        insight_parts.append(
+            f"Skills with positive feedback: {', '.join(sorted(positive_skills)[:10])}"
+        )
     if negative_skills:
-        insight_parts.append(f"Skills with negative feedback: {', '.join(sorted(negative_skills)[:5])}")
+        insight_parts.append(
+            f"Skills with negative feedback: {', '.join(sorted(negative_skills)[:5])}"
+        )
 
     # Total stats
     total_up = sum(1 for r in records if r["rating"] == 1)
     total_down = sum(1 for r in records if r["rating"] == -1)
-    insight_parts.append(f"Overall: {total_up} thumbs up, {total_down} thumbs down ({len(records)} total ratings)")
+    insight_parts.append(
+        f"Overall: {total_up} thumbs up, {total_down} thumbs down ({len(records)} total ratings)"
+    )
 
     return {
         "has_feedback": True,
