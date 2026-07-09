@@ -14,10 +14,9 @@ import sys
 import threading
 from pathlib import Path
 from typing import Optional
-
-import httpx
 from urllib.parse import urlencode, urlparse, urlunparse
 
+import httpx
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
@@ -1027,9 +1026,7 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         error = request.query_params.get("error")
         if error:
             logger.warning(f"Google OAuth callback error: {error}")
-            return RedirectResponse(
-                url=f"/login?error=google_{error}", status_code=302
-            )
+            return RedirectResponse(url=f"/login?error=google_{error}", status_code=302)
         if not code:
             logger.warning("Google OAuth callback: no code received")
             return RedirectResponse(url="/login?error=google_no_code", status_code=302)
@@ -1043,7 +1040,9 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
             )
 
         redirect_uri = _google_redirect_uri(request)
-        logger.info(f"Google OAuth callback: exchanging code, redirect_uri={redirect_uri}")
+        logger.info(
+            f"Google OAuth callback: exchanging code, redirect_uri={redirect_uri}"
+        )
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -1065,7 +1064,9 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
                     )
                 access_token = token_data.get("access_token")
                 if not access_token:
-                    logger.error(f"Google token response missing access_token: {token_data}")
+                    logger.error(
+                        f"Google token response missing access_token: {token_data}"
+                    )
                     return RedirectResponse(
                         url="/login?error=google_token", status_code=302
                     )
@@ -1128,7 +1129,9 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
             user_agent=request.headers.get("user-agent", ""),
         )
         log_activity(
-            user["id"], email, "login",
+            user["id"],
+            email,
+            "login",
             details=f"User {user['name']} logged in via Google",
         )
 
