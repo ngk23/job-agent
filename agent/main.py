@@ -695,9 +695,11 @@ async def export_jobs_only(config: AppConfig):
 # ─── Form auto-fill ──────────────────────────────────────────────────────────
 
 async def run_apply(config: AppConfig, job_url: str):
-    """Auto-fill a job application form using OpenRouter + Playwright."""
-    if not config.openrouter_api_key:
-        print("[ERROR] OPENROUTER_API_KEY not set. Please set it before running:")
+    """Auto-fill a job application form using AI + Playwright."""
+    if not config.openrouter_api_key and not config.ollama_base_url and not config.groq_api_key:
+        print("[ERROR] No AI provider configured. Set OLLAMA_BASE_URL, OPENROUTER_API_KEY, or GROQ_API_KEY:")
+        print('   OLLAMA_BASE_URL="http://localhost:11434"   (local LLM — $0 cost)')
+        print('   — or —')
         print('   export OPENROUTER_API_KEY="sk-or-..."')
         print("Get a free key at https://openrouter.ai")
         return 1
@@ -709,7 +711,9 @@ async def run_apply(config: AppConfig, job_url: str):
         return 1
 
     form_profile = map_profile_to_form_filler(profile)
-    agent = JobApplicationAgent(config.openrouter_api_key, form_profile)
+    # Pass the OpenRouter key (or empty for Ollama which doesn't need one)
+    api_key = config.openrouter_api_key or "ollama"
+    agent = JobApplicationAgent(api_key, form_profile)
     result = await agent.apply_to_job(job_url, headless=config.headless)
 
     if "error" in result:

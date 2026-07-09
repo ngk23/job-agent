@@ -24,9 +24,13 @@ def validate_config(config: "AppConfig") -> bool:
 
 
 def validate_config_run(config: "AppConfig") -> bool:
-    """Validate configuration specifically for the 'run' command (requires API key)."""
+    """Validate configuration specifically for the 'run' command (requires API key or Ollama)."""
+    if config.ollama_base_url:
+        return True  # Ollama is local — no API key needed
     if not config.openrouter_api_key and not config.groq_api_key:
-        print("[ERROR] No API key found. Set either:")
+        print("[ERROR] No AI provider configured. Set either:")
+        print('   OLLAMA_BASE_URL="http://localhost:11434"   (local LLM — $0 cost, recommended)')
+        print('   — or —')
         print('   OPENROUTER_API_KEY="sk-or-..."   (via OpenRouter, free tier available)')
         print('   — or —')
         print('   GROQ_API_KEY="gsk_..."           (via Groq, faster free tier, 30 req/min)')
@@ -42,6 +46,10 @@ class AppConfig:
     # API Keys
     openrouter_api_key: str = ""
     groq_api_key: str = ""
+
+    # Ollama (local LLM, $0 cost)
+    ollama_base_url: str = ""
+    ollama_model: str = "qwen3"
 
     # Profile
     profile_path: str = "profiles/profile.json"
@@ -76,6 +84,8 @@ class AppConfig:
         """Load config from environment variables."""
         self.openrouter_api_key = get_env("OPENROUTER_API_KEY", self.openrouter_api_key)
         self.groq_api_key = get_env("GROQ_API_KEY", self.groq_api_key)
+        self.ollama_base_url = get_env("OLLAMA_BASE_URL", self.ollama_base_url)
+        self.ollama_model = get_env("OLLAMA_MODEL", self.ollama_model)
         self.profile_path = get_env("PROFILE_PATH", self.profile_path)
         self.resume_path = get_env("RESUME_PATH", self.resume_path) or self.resume_path
         self.headless = get_env("HEADLESS", "false").lower() == "true" or self.headless

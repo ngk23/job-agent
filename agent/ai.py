@@ -15,6 +15,10 @@ from .config import AppConfig
 
 logger = logging.getLogger(__name__)
 
+# Ollama (local LLM — $0 cost, no rate limits)
+OLLAMA_BASE_URL_DEFAULT = "http://localhost:11434/v1"
+OLLAMA_RATE_LIMIT_DELAY = 0.3  # seconds between requests (local, minimal)
+
 # Groq rate limit: 30 requests per minute (free tier) = 1 req / 2s comfortably
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_RATE_LIMIT_DELAY = 2.0  # seconds between requests for Groq
@@ -39,12 +43,14 @@ OPENROUTER_MODELS = [
 
 
 class AIClient:
-    """Client for AI integration via Groq (preferred) or OpenRouter.
+    """Client for AI integration via Ollama (preferred), Groq, or OpenRouter.
     
+    - Ollama: $0 cost, local LLM. Requires Ollama running locally with a model pulled.
+      Set OLLAMA_BASE_URL (default: http://localhost:11434/v1) and OLLAMA_MODEL (default: qwen3).
     - Groq: 30 req/min free tier, ~2s per request. Models: Llama 3 70B, Mixtral, Llama 3 8B.
     - OpenRouter: ~5 req/min free tier (spread across model buckets).
     
-    Groq is auto-selected when GROQ_API_KEY is set (faster & more generous free tier).
+    Priority: Ollama > Groq > OpenRouter (local & free first).
     """
 
     def __init__(self, config: AppConfig):
@@ -52,10 +58,28 @@ class AIClient:
         self.feedback_insights = ""
         self.openai_client = None
         self._current_model_idx = 0
-        self._using_groq = False  # Track which provider we're using
+        self._using_groq = False
+        self._using_ollama = False
+        self._provider_name = "unconfigured"
 
-        # Prefer Groq if the key is set (faster free tier, 30 req/min)
-        if config.groq_api_key:
+        # Prefer Ollama if configured (local LLM, $0 cost, no rate limits)
+        if config.ollama_base_url:
+            from openai import OpenAI
+            base_url = config.ollama_base_url.rstrip('/')
+            if not base_url.endswith('/v1'):
+                base_url += '/v1'
+            self.openai_client = OpenAI(
+                base_url=base_url,
+                api_key="ollama",  # Ollama doesn't require a real key
+                max_retries=1,
+            )
+            self._using_ollama = True
+            self.MODELS = [config.ollama_model or "qwen3"]
+            self.rate_limit_delay = OLLAMA_RATE_LIMIT_DELAY
+            self._provider_name = "Ollama"
+            logger.info(f"AI client initialized with Ollama (%s @ %s, ~%.1fs/req)",
+                        self.MODELS[0], base_url, self.rate_limit_delay)
+        elif config.groq_api_key:
             from openai import OpenAI
             self.openai_client = OpenAI(
                 base_url=GROQ_BASE_URL,
@@ -122,7 +146,12 @@ class AIClient:
                 self._current_model_idx = (self._current_model_idx + 1) % len(self.MODELS)
                 next_model = self.MODELS[self._current_model_idx]
                 
-                if isinstance(e, NotFoundError):
+                if self._using_ollama:
+                    # Ollama is local — errors are connection issues, not rate limits
+                    delay = self.rate_limit_delay * (2 ** (attempt % max(len(self.MODELS), 1)))
+                    logger.warning(f"[{self._provider_name}] Connection error on {model}: {e} — retrying in {delay:.1f}s (attempt {attempt+1})")
+                    time.sleep(delay)
+                elif isinstance(e, NotFoundError):
                     logger.warning(f"[{self._provider_name}] Model {model} unavailable (404) — skipping, switching to {next_model}")
                 elif isinstance(e, RateLimitError):
                     logger.warning(f"[{self._provider_name}] Rate limited (429) on {model} — switching to {next_model}")
@@ -140,6 +169,12 @@ class AIClient:
                 raise
         
         logger.error(f"[{self._provider_name}] All API attempts failed after {max_retries} retries")
+        if self._using_ollama:
+            raise RuntimeError(
+                f"Ollama is unreachable at {self.config.ollama_base_url}. "
+                f"Make sure Ollama is running and model '{self.MODELS[0]}' is pulled.\n"
+                f"Run: ollama pull {self.MODELS[0]}"
+            )
         raise RuntimeError(
             f"{self._provider_name} all models rate-limited. Try again later "
             f"or {'add an OpenRouter credit balance' if not self._using_groq else 'check your Groq API key'}"
