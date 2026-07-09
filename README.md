@@ -18,17 +18,17 @@ Upload **any CV** (any background, any person) and the agent automatically extra
 
 ## 🚀 Deploy on Hugging Face Spaces (Free, 24/7)
 
-Easiest way to access the dashboard from **any device** (phone, tablet, laptop):
+### Live Demo
 
-### 1-Click Deploy
+[![Live Demo](https://img.shields.io/badge/%F0%9F%A4%97%20Live%20Demo-View%20on%20HF-blue)](https://huggingface.co/spaces/Gouklkrishan/job-agent)
 
-[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/new-space?docker=python&template=docker)
+**[huggingface.co/spaces/Gouklkrishan/job-agent](https://huggingface.co/spaces/Gouklkrishan/job-agent)** — accessible from any device (phone, tablet, laptop).
 
-1. Click the badge above → **Create a new Space**
-2. Set **Space name** (e.g., `job-agent`)  
-3. **Space SDK**: Select **Docker**  
-4. **Docker Template**: Select **Python**  
-5. Click **Create Space**
+### Deploy Your Own
+
+1. **[Create a new Space](https://huggingface.co/new-space?docker=python&template=docker)** on Hugging Face
+2. Set **Space name** (e.g., `job-agent`), **Space SDK**: Docker
+3. Clone it: `git clone https://huggingface.co/spaces/YOUR_USERNAME/job-agent`
 
 ### Push your code to the Space
 
@@ -39,6 +39,8 @@ cd job-agent
 
 # Copy all files from this project
 # (copy Dockerfile, agent/, profiles/, requirements.txt, etc.)
+
+# Or push directly from GitHub — see Auto-Deploy section below
 
 # Push
 git add .
