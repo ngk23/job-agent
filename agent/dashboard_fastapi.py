@@ -369,12 +369,6 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         if not email or not password:
             return JSONResponse({"status": "error", "error": "Email and password required"}, 400)
         result = login_user_fastapi(request, email, password)
-        if not result and email == DEFAULT_ADMIN_EMAIL.lower():
-            force_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
-            admin_user = db_get_user_by_email(email)
-            if admin_user:
-                update_user_password(admin_user["id"], force_hash)
-                result = login_user_fastapi(request, email, password)
         if isinstance(result, dict) and result.get("error"):
             code = 403 if result["error"] == "pending" else 403
             log_login_attempt(email=email, success=False, details=result["error"],

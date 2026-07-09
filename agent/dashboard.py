@@ -2844,14 +2844,6 @@ async function loadFeedbackSummary() {
         if not email or not password:
             return jsonify({'status': 'error', 'error': 'Email and password required'}), 400
         result = login_user(email, password)
-        # If admin login fails due to password mismatch, force-reset and retry once
-        if not result and email == DEFAULT_ADMIN_EMAIL.lower():
-            force_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
-            admin_user = db_get_user_by_email(email)
-            if admin_user:
-                update_user_password(admin_user["id"], force_hash)
-                logger.info(f"Admin login failed - force reset password and retry")
-                result = login_user(email, password)
         # Check if result is an error dict (pending/rejected) or actual user
         if isinstance(result, dict) and result.get('error'):
             if result['error'] == 'pending':
@@ -4751,13 +4743,6 @@ function escHtml(str) {
         if isinstance(result, dict) and result.get('error'):
             return f'<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1 style="color:#ff3355;">Login Failed: {result["error"]}</h1><a href="/" style="color:#0ff;">Go to Dashboard</a></body></html>'
         if not result:
-            # Force-reset admin password and retry
-            if email == DEFAULT_ADMIN_EMAIL.lower():
-                force_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
-                admin_user = db_get_user_by_email(email)
-                if admin_user:
-                    update_user_password(admin_user["id"], force_hash)
-                    result = login_user(email, password)
             if not result:
                 return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;"><h1 style="color:#ff3355;">Invalid credentials</h1><a href="/test-login" style="color:#0ff;">Try again</a></body></html>'
         return '<html><body style="font-family:monospace;background:#0a0a0f;color:#c8c8d0;padding:40px;text-align:center;"><h1 style="color:#00ff41;">Login Successful!</h1><p>Session should be set.</p><a href="/" style="color:#0ff;">Go to Dashboard</a></body></html>'
