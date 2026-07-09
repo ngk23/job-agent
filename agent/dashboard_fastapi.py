@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+from urllib.parse import urlencode, urlparse, urlunparse
+
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
@@ -372,12 +374,15 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
     stable_secret = os.environ.get("DASHBOARD_SECRET_KEY", "")
     if not stable_secret:
         stable_secret = hashlib.sha256(str(config.__dict__).encode()).hexdigest()[:32]
+    # On HuggingFace Spaces, the app runs inside an iframe on huggingface.co.
+    # Browsers block SameSite=Lax cookies in cross-site iframes, so we must
+    # use SameSite=None with Secure=True to allow session cookies to work.
     app.add_middleware(
         SessionMiddleware,
         secret_key=stable_secret,
         session_cookie="jobagent_session",
         max_age=86400,
-        same_site="lax",
+        same_site="none" if config.is_hf_space else "lax",
         https_only=config.is_hf_space,
     )
 
@@ -457,34 +462,48 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         data = await request.json()
         email = data.get("email", "").strip().lower()
         password = data.get("password", "")
+        client_ip = request.client.host if request.client else ""
+        user_agent = request.headers.get("user-agent", "")
         if not email or not password:
+            logger.warning(f"Login attempt with empty fields from {client_ip}")
             return JSONResponse(
                 {"status": "error", "error": "Email and password required"}, 400
             )
+        logger.info(f"Login attempt: {email} from {client_ip}")
         result = login_user_fastapi(request, email, password)
         if isinstance(result, dict) and result.get("error"):
             code = 403 if result["error"] == "pending" else 403
+            logger.warning(f"Login blocked for {email}: {result['error']}")
             log_login_attempt(
                 email=email,
                 success=False,
                 details=result["error"],
-                ip_address=request.client.host if request.client else "",
-                user_agent=request.headers.get("user-agent", ""),
+                ip_address=client_ip,
+                user_agent=user_agent,
             )
             return JSONResponse(
                 {"status": "error", "error": result.get("message", result["error"])},
                 code,
             )
         if not result:
+            logger.warning(f"Login failed for {email}: invalid credentials")
+            log_login_attempt(
+                email=email,
+                success=False,
+                details="invalid_credentials",
+                ip_address=client_ip,
+                user_agent=user_agent,
+            )
             return JSONResponse(
                 {"status": "error", "error": "Invalid email or password"}, 401
             )
+        logger.info(f"Login successful: {email} (user_id={result.get('id')})")
         log_login_attempt(
             email=email,
             success=True,
             user_id=result.get("id"),
-            ip_address=request.client.host if request.client else "",
-            user_agent=request.headers.get("user-agent", ""),
+            ip_address=client_ip,
+            user_agent=user_agent,
         )
         uid = result.get("id")
         if uid:
@@ -958,50 +977,76 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         return {"status": "ok"}
 
     # ── Google OAuth ──
+    def _google_redirect_uri(request: Request) -> str:
+        """Build the Google OAuth redirect URI correctly for any environment.
+
+        On HuggingFace Spaces, Starlette's request.url_for returns an internal
+        http:// URL (e.g. http://container:7860/login/google/callback).
+        We must force https:// for Google to accept it, and use the external
+        hostname if available via X-Forwarded-Host.
+        """
+        raw_uri = str(request.url_for("google_callback"))
+        # Starlette returns absolute URLs. On HF Spaces / behind proxies,
+        # force https and use the external hostname from headers.
+        if raw_uri.startswith("http://") and (
+            config.is_hf_space or request.headers.get("x-forwarded-proto") == "https"
+        ):
+            raw_uri = raw_uri.replace("http://", "https://", 1)
+        # If there's an X-Forwarded-Host, use that hostname instead of the internal one
+        fwd_host = request.headers.get("x-forwarded-host", "")
+        if fwd_host:
+            parsed = urlparse(raw_uri)
+            parsed = parsed._replace(netloc=fwd_host)
+            raw_uri = urlunparse(parsed)
+        return raw_uri
+
     @app.get("/login/google")
     async def google_login(request: Request):
         google_client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
         if not google_client_id:
+            logger.warning("Google OAuth: GOOGLE_CLIENT_ID not set")
             return RedirectResponse(
                 url="/login?error=google_not_configured", status_code=302
             )
-        redirect_uri = str(request.url_for("google_callback"))
-        # Make redirect_uri absolute
-        if redirect_uri.startswith("/"):
-            scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-            host = request.headers.get(
-                "x-forwarded-host",
-                request.url.netloc.split(":")[0] if request.url.netloc else "localhost",
-            )
-            redirect_uri = f"{scheme}://{host}{redirect_uri}"
-        auth_url = (
-            f"https://accounts.google.com/o/oauth2/v2/auth?"
-            f"client_id={google_client_id}&redirect_uri={redirect_uri}"
-            f"&response_type=code&scope=openid+email+profile"
-        )
+        redirect_uri = _google_redirect_uri(request)
+        logger.info(f"Google OAuth: redirect_uri={redirect_uri}")
+        params = {
+            "client_id": google_client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "access_type": "offline",
+            "prompt": "consent",
+        }
+        auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
         return RedirectResponse(url=auth_url, status_code=302)
 
     @app.get("/login/google/callback")
     async def google_callback(request: Request):
         code = request.query_params.get("code")
+        error = request.query_params.get("error")
+        if error:
+            logger.warning(f"Google OAuth callback error: {error}")
+            return RedirectResponse(
+                url=f"/login?error=google_{error}", status_code=302
+            )
         if not code:
+            logger.warning("Google OAuth callback: no code received")
             return RedirectResponse(url="/login?error=google_no_code", status_code=302)
+
         google_client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
         google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
         if not google_client_id or not google_client_secret:
+            logger.error("Google OAuth: client credentials not configured")
             return RedirectResponse(
                 url="/login?error=google_not_configured", status_code=302
             )
-        redirect_uri = str(request.url_for("google_callback"))
-        if redirect_uri.startswith("/"):
-            scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-            host = request.headers.get(
-                "x-forwarded-host",
-                request.url.netloc.split(":")[0] if request.url.netloc else "localhost",
-            )
-            redirect_uri = f"{scheme}://{host}{redirect_uri}"
+
+        redirect_uri = _google_redirect_uri(request)
+        logger.info(f"Google OAuth callback: exchanging code, redirect_uri={redirect_uri}")
+
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 token_resp = await client.post(
                     "https://oauth2.googleapis.com/token",
                     data={
@@ -1013,8 +1058,14 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
                     },
                 )
                 token_data = token_resp.json()
+                if "error" in token_data:
+                    logger.error(f"Google token exchange failed: {token_data}")
+                    return RedirectResponse(
+                        url="/login?error=google_token", status_code=302
+                    )
                 access_token = token_data.get("access_token")
                 if not access_token:
+                    logger.error(f"Google token response missing access_token: {token_data}")
                     return RedirectResponse(
                         url="/login?error=google_token", status_code=302
                     )
@@ -1023,32 +1074,65 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
                 userinfo = user_resp.json()
+                if "error" in userinfo:
+                    logger.error(f"Google userinfo failed: {userinfo}")
+                    return RedirectResponse(
+                        url="/login?error=google_userinfo", status_code=302
+                    )
+        except httpx.TimeoutException:
+            logger.exception("Google OAuth token exchange timed out")
+            return RedirectResponse(url="/login?error=google_timeout", status_code=302)
         except Exception:
+            logger.exception("Google OAuth token exchange failed")
             return RedirectResponse(url="/login?error=google_failed", status_code=302)
+
         email = userinfo.get("email", "").lower()
         name = userinfo.get("name", "Google User")
         if not email:
+            logger.error("Google OAuth: no email in userinfo")
             return RedirectResponse(url="/login?error=google_no_email", status_code=302)
+
+        logger.info(f"Google OAuth: user {email} ({name}) authenticated")
+
+        # Find or create user
         user = db_get_user_by_email(email)
         if not user:
+            # Create new user — Google-authenticated users get auto-approved
             user = register_user_fn(email, os.urandom(12).hex(), name)
             if user and user.get("status") == "pending":
                 approve_user(user["id"])
-                user = db_get_user_by_email(email)
-        if user:
-            request.session["user_id"] = user["id"]
-            request.session["user_name"] = user["name"]
-            request.session["user_role"] = user.get("role", "user")
-            request.session["user_email"] = user["email"]
-            log_login_attempt(
-                email=email,
-                success=True,
-                user_id=user["id"],
-                ip_address=request.client.host if request.client else "",
-                user_agent=request.headers.get("user-agent", ""),
-            )
-            return RedirectResponse(url="/", status_code=302)
-        return RedirectResponse(url="/login?error=google_failed", status_code=302)
+                logger.info(f"Google OAuth: auto-approved new user {email}")
+            user = db_get_user_by_email(email)
+        elif user.get("status") == "pending":
+            # Existing pending user signing in via Google — auto-approve
+            approve_user(user["id"])
+            user = db_get_user_by_email(email)
+            logger.info(f"Google OAuth: auto-approved pending user {email}")
+
+        if not user:
+            logger.error(f"Google OAuth: failed to find/create user {email}")
+            return RedirectResponse(url="/login?error=google_failed", status_code=302)
+
+        # Set session
+        request.session["user_id"] = user["id"]
+        request.session["user_name"] = user["name"]
+        request.session["user_role"] = user.get("role", "user")
+        request.session["user_email"] = user["email"]
+
+        log_login_attempt(
+            email=email,
+            success=True,
+            user_id=user["id"],
+            details="Google OAuth",
+            ip_address=request.client.host if request.client else "",
+            user_agent=request.headers.get("user-agent", ""),
+        )
+        log_activity(
+            user["id"], email, "login",
+            details=f"User {user['name']} logged in via Google",
+        )
+
+        return RedirectResponse(url="/", status_code=302)
 
     return app
 

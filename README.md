@@ -20,9 +20,9 @@ Upload **any CV** (any background, any person) and the agent automatically extra
 
 ### Live Demo
 
-[![Live Demo](https://img.shields.io/badge/%F0%9F%A4%97%20Live%20Demo-View%20on%20HF-blue)](https://huggingface.co/spaces/Gouklkrishan/job-agent)
+[![Live Demo](https://img.shields.io/badge/%F0%9F%A4%97%20Live%20Demo-View%20on%20HF-blue)](https://huggingface.co/spaces/gouklkrishan/job-agent)
 
-**[huggingface.co/spaces/Gouklkrishan/job-agent](https://huggingface.co/spaces/Gouklkrishan/job-agent)** — accessible from any device (phone, tablet, laptop).
+**[huggingface.co/spaces/Gouklkrishan/job-agent](https://huggingface.co/spaces/gouklkrishan/job-agent)** — accessible from any device (phone, tablet, laptop).
 
 ### Deploy Your Own
 
