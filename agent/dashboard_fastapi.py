@@ -43,7 +43,7 @@ from .notifier import notify_approved, notify_rejected, set_gmail_credentials, _
 from .email_utils import send_password_reset_email
 from .feedback_learning import get_feedback_insights_short
 from .database import (
-    init_db, get_user_applications, get_all_applications, get_applied_urls,
+    init_db, get_db, _cursor, get_user_applications, get_all_applications, get_applied_urls,
     mark_applied as db_mark_applied, save_job as db_save_job, unsave_job as db_unsave_job,
     get_saved_application_ids, get_all_users, get_pending_users,
     approve_user, reject_user, get_stats,
@@ -497,9 +497,18 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
         if not user:
             return JSONResponse({"status": "error", "error": "Invalid or expired reset token."}, 400)
         new_hash = hash_password(new_pw)
-        update_user_password(user["id"], new_hash)
-        use_password_reset_token(token)
-        return {"status": "ok", "message": "Password reset! You can now log in."}
+        # Update directly via database module and verify the change took effect
+        conn = get_db()
+        cur = _cursor(conn)
+        cur.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["id"]))
+        conn.commit()
+        # Verify the update actually persisted
+        cur.execute("SELECT password_hash FROM users WHERE id = ?", (user["id"],))
+        actual = cur.fetchone()
+        if actual and actual["password_hash"] == new_hash:
+            use_password_reset_token(token)
+            return {"status": "ok", "message": "Password reset! You can now log in."}
+        return JSONResponse({"status": "error", "error": "Failed to update password"}, 500)
 
     # ── Upload CV ──
     @app.post("/upload")

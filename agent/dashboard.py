@@ -45,7 +45,7 @@ from .notifier import notify_approved, notify_rejected, set_gmail_credentials, _
 from .email_utils import send_password_reset_email
 from .feedback_learning import get_feedback_insights_short
 from .database import (
-    init_db,
+    init_db, get_db, _cursor,
     get_user_applications,
     get_all_applications,
     get_applied_urls,
@@ -3312,11 +3312,18 @@ a:hover{text-decoration:underline}
             return jsonify({'status': 'error', 'error': 'Password must be at least 6 characters'}), 400
         
         new_hash = hash_password(new_password)
-        ok = update_user_password(user['id'], new_hash)
-        if ok:
+        # Update directly and verify the change took effect
+        conn = get_db()
+        cur = _cursor(conn)
+        cur.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user['id']))
+        conn.commit()
+        # Verify the update actually persisted
+        cur.execute("SELECT password_hash FROM users WHERE id = ?", (user['id'],))
+        actual = cur.fetchone()
+        if actual and actual['password_hash'] == new_hash:
             use_password_reset_token(token)
             logger.info(f"Password reset completed for user {user['email']}")
-            return jsonify({'status': 'ok'})
+            return jsonify({'status': 'ok', 'message': 'Password reset! You can now log in.'})
         return jsonify({'status': 'error', 'error': 'Failed to update password'}), 500
 
     # ── Forgot Password HTML ──
