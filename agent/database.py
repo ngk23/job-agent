@@ -211,7 +211,7 @@ else:
 
     def _cursor(conn):
         """Get a cursor for SQLite."""
-        return conn
+        return conn.cursor()
 
     def close_db_connection():
         """No-op for SQLite (connections are per-thread, no pool to return)."""
