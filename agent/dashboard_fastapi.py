@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import queue
+import secrets
 import subprocess
 import sys
 import threading
@@ -370,9 +371,30 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
     app = FastAPI(title="Job Agent", version="2.0.0")
 
     # Session middleware (cookie-based, same as Flask)
+    # Use a PERSISTENT secret key stored in a file so sessions survive
+    # container restarts and are consistent across all workers/replicas.
+    # Without this, each worker computes a different key and can't read
+    # sessions set by other workers — the #1 cause of login redirect loops.
     stable_secret = os.environ.get("DASHBOARD_SECRET_KEY", "")
     if not stable_secret:
-        stable_secret = hashlib.sha256(str(config.__dict__).encode()).hexdigest()[:32]
+        secret_file = os.path.join(config.data_dir, "secret_key")
+        try:
+            if os.path.exists(secret_file):
+                with open(secret_file) as f:
+                    stable_secret = f.read().strip()
+                    if stable_secret:
+                        logger.info("Loaded persistent session secret from %s", secret_file)
+        except Exception:
+            pass
+        if not stable_secret:
+            stable_secret = secrets.token_hex(32)
+            try:
+                os.makedirs(os.path.dirname(secret_file) or ".", exist_ok=True)
+                with open(secret_file, "w") as f:
+                    f.write(stable_secret)
+                logger.info("Created persistent session secret at %s", secret_file)
+            except Exception as e:
+                logger.warning("Could not save persistent secret to %s: %s", secret_file, e)
     # On HuggingFace Spaces, the app runs inside an iframe on huggingface.co.
     # Browsers block SameSite=Lax cookies in cross-site iframes, so we must
     # use SameSite=None with Secure=True to allow session cookies to work.
@@ -439,6 +461,66 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
     async def healthz():
         return {"status": "ok"}
 
+    # ── Debug: Cookie / Session Inspector ──
+    @app.get("/debug/cookie")
+    async def debug_cookie(request: Request, key: str = ""):
+        """Diagnostic endpoint to inspect session cookie state.
+        Visit /debug/cookie?key=debug to check if your session cookie is
+        being sent and read correctly. Useful for debugging login redirect loops.
+        Requires a simple shared secret (default: "debug", override via DEBUG_KEY env var).
+        """
+        expected_key = os.environ.get("DEBUG_KEY", "debug")
+        if key != expected_key:
+            return JSONResponse(
+                {"error": "Missing or invalid debug key. Use ?key=debug"}, 403
+            )
+
+        # Read the raw cookie header and check for our session cookie
+        raw_cookie = request.headers.get("cookie", "")
+        has_session_cookie = any(
+            c.strip().startswith("jobagent_session=")
+            for c in raw_cookie.split(";") if "=" in c
+        )
+
+        user_id = request.session.get("user_id")
+        user_name = request.session.get("user_name")
+        user_role = request.session.get("user_role")
+        user_email = request.session.get("user_email")
+
+        # Request metadata
+        scheme = request.scope.get("scheme", "unknown")
+        host = request.headers.get("host", "")
+        x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
+        x_forwarded_host = request.headers.get("x-forwarded-host", "")
+        client_ip = request.client.host if request.client else ""
+
+        # Environment
+        is_hf = config.is_hf_space
+        data_dir = config.data_dir
+
+        return {
+            "session": {
+                "cookie_present": has_session_cookie,
+                "user_id": user_id,
+                "user_name": user_name,
+                "user_role": user_role,
+                "user_email": user_email,
+                "authenticated": user_id is not None,
+            },
+            "request": {
+                "scheme": scheme,
+                "host": host,
+                "client_ip": client_ip,
+                "x_forwarded_proto": x_forwarded_proto,
+                "x_forwarded_host": x_forwarded_host,
+            },
+            "environment": {
+                "is_hf_space": is_hf,
+                "data_dir": data_dir,
+                "session_cookie_name": "jobagent_session",
+            },
+        }
+
     # ── Login ──
     @app.get("/login")
     async def login_get(request: Request):
@@ -458,16 +540,25 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
     async def login_post(request: Request):
         ensure_admin_exists()
         cleanup_old_saved_jobs(days=7)
-        data = await request.json()
+        # Accept both JSON (JS fetch) and form-encoded (no-JS fallback) POST bodies.
+        # The native <form> submit sends application/x-www-form-urlencoded.
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            data = await request.json()
+        else:
+            form = await request.form()
+            data = {"email": form.get("email", ""), "password": form.get("password", "")}
         email = data.get("email", "").strip().lower()
         password = data.get("password", "")
         client_ip = request.client.host if request.client else ""
         user_agent = request.headers.get("user-agent", "")
         if not email or not password:
             logger.warning(f"Login attempt with empty fields from {client_ip}")
-            return JSONResponse(
-                {"status": "error", "error": "Email and password required"}, 400
-            )
+            if "application/json" in content_type:
+                return JSONResponse(
+                    {"status": "error", "error": "Email and password required"}, 400
+                )
+            return RedirectResponse(url="/login?error=empty", status_code=302)
         logger.info(f"Login attempt: {email} from {client_ip}")
         result = login_user_fastapi(request, email, password)
         if isinstance(result, dict) and result.get("error"):
@@ -480,10 +571,13 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
                 ip_address=client_ip,
                 user_agent=user_agent,
             )
-            return JSONResponse(
-                {"status": "error", "error": result.get("message", result["error"])},
-                code,
-            )
+            if "application/json" in content_type:
+                return JSONResponse(
+                    {"status": "error", "error": result.get("message", result["error"])},
+                    code,
+                )
+            error_param = "pending" if result["error"] == "pending" else "invalid"
+            return RedirectResponse(url=f"/login?error={error_param}", status_code=302)
         if not result:
             logger.warning(f"Login failed for {email}: invalid credentials")
             log_login_attempt(
@@ -493,9 +587,11 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
                 ip_address=client_ip,
                 user_agent=user_agent,
             )
-            return JSONResponse(
-                {"status": "error", "error": "Invalid email or password"}, 401
-            )
+            if "application/json" in content_type:
+                return JSONResponse(
+                    {"status": "error", "error": "Invalid email or password"}, 401
+                )
+            return RedirectResponse(url="/login?error=invalid", status_code=302)
         logger.info(f"Login successful: {email} (user_id={result.get('id')})")
         log_login_attempt(
             email=email,
@@ -510,11 +606,14 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
                 uid, email, "login", details=f"User {result['name']} logged in"
             )
         must_change = needs_password_change(uid) if uid else False
-        return {
-            "status": "ok",
-            "user": {"name": result["name"], "email": result["email"]},
-            "must_change_password": must_change,
-        }
+        if "application/json" in content_type:
+            return {
+                "status": "ok",
+                "user": {"name": result["name"], "email": result["email"]},
+                "must_change_password": must_change,
+            }
+        # No-JS fallback: traditional form submit → redirect to dashboard
+        return RedirectResponse(url="/", status_code=302)
 
     # ── Signup ──
     @app.get("/signup")
@@ -525,28 +624,44 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
 
     @app.post("/signup")
     async def signup_post(request: Request):
-        data = await request.json()
+        # Accept both JSON (JS fetch) and form-encoded (no-JS fallback) POST bodies.
+        # The native <form> submit sends application/x-www-form-urlencoded.
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            data = await request.json()
+        else:
+            form = await request.form()
+            data = {"name": form.get("name", ""), "email": form.get("email", ""), "password": form.get("password", "")}
         name = data.get("name", "").strip()
         email = data.get("email", "").strip().lower()
         password = data.get("password", "")
         if not name or not email or not password:
-            return JSONResponse(
-                {"status": "error", "error": "All fields required"}, 400
-            )
+            if "application/json" in content_type:
+                return JSONResponse(
+                    {"status": "error", "error": "All fields required"}, 400
+                )
+            return RedirectResponse(url="/signup?error=empty", status_code=302)
         if len(password) < 6:
-            return JSONResponse(
-                {"status": "error", "error": "Password must be at least 6 characters"},
-                400,
-            )
+            if "application/json" in content_type:
+                return JSONResponse(
+                    {"status": "error", "error": "Password must be at least 6 characters"},
+                    400,
+                )
+            return RedirectResponse(url="/signup?error=short_password", status_code=302)
         user = register_user_fn(email, password, name)
         if not user:
-            return JSONResponse(
-                {"status": "error", "error": "Email already registered"}, 409
-            )
-        return {
-            "status": "pending_approval",
-            "message": "Account created! Please wait for admin approval.",
-        }
+            if "application/json" in content_type:
+                return JSONResponse(
+                    {"status": "error", "error": "Email already registered"}, 409
+                )
+            return RedirectResponse(url="/signup?error=email_taken", status_code=302)
+        if "application/json" in content_type:
+            return {
+                "status": "pending_approval",
+                "message": "Account created! Please wait for admin approval.",
+            }
+        # No-JS fallback: traditional form submit → redirect to login with success message
+        return RedirectResponse(url="/login?signup=ok", status_code=302)
 
     # ── Logout ──
     @app.post("/logout")
