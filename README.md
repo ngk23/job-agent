@@ -55,6 +55,15 @@ git push
 In your Space's **Settings → Repository Secrets**:
 - `OPENROUTER_API_KEY` → Your OpenRouter API key (get one at https://openrouter.ai)
 
+### Optional: Use PostgreSQL (Neon, Supabase, etc.)
+
+By default, the app uses SQLite (data stored on the ephemeral container — resets on rebuild). For persistent data across rebuilds, connect a PostgreSQL database:
+
+1. Get a PostgreSQL connection string (e.g., from [Neon](https://neon.tech) — free tier available)
+2. In your Space's **Settings → Repository Secrets**, add:
+   - `DATABASE_URL` → `postgresql://user:password@host/dbname?sslmode=require`
+3. Restart your Space — data persists across rebuilds and all users share the same database
+
 ### Optional: Enable Google Sign-In
 
 1. Get your Google OAuth credentials from [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
@@ -169,6 +178,8 @@ python -m agent run --headless
 | `HEADLESS` | Run browser invisibly | `false` |
 | `MIN_SCORE` | Minimum AI score for high match | `70` |
 | `MAX_JOB_SEARCH` | Max jobs per platform | `0` (unlimited) |
+| `DATABASE_URL` | PostgreSQL connection string (empty = SQLite) | (empty) |
+| `SESSION_SECRET` | Secret key for session cookies | auto-generated |
 
 ---
 

@@ -61,6 +61,7 @@ from .database import (
     get_all_users,
     get_applied_urls,
     get_db,
+    get_db_connection_info,
     get_feedback_summary,
     get_login_logs,
     get_pending_users,
@@ -461,6 +462,17 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
     async def healthz():
         return {"status": "ok"}
 
+    @app.get("/api/db-status")
+    async def db_status(request: Request):
+        """Return database connection info so you can verify PostgreSQL is active.
+        Visit /api/db-status to confirm your Neon DB is connected.
+        """
+        if not request.session.get("user_id"):
+            return JSONResponse({"error": "Auth required"}, 401)
+        info = get_db_connection_info()
+        info["status"] = "connected"
+        return info
+
     # ── Debug: Cookie / Session Inspector ──
     @app.get("/debug/cookie")
     async def debug_cookie(request: Request, key: str = ""):
@@ -526,11 +538,18 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
     async def login_get(request: Request):
         if request.session.get("user_id"):
             return RedirectResponse(url="/", status_code=302)
-        pending_msg = ""
-        if request.query_params.get("error") == "pending":
-            pending_msg = '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(255,170,0,0.1);border:1px solid rgba(255,170,0,0.3);border-radius:8px;color:#ffaa00;font-size:0.85em">Your account is pending admin approval.</div>'
+        error = request.query_params.get("error", "")
+        signup_ok = request.query_params.get("signup", "")
+        error_messages = {
+            "pending": '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(255,170,0,0.1);border:1px solid rgba(255,170,0,0.3);border-radius:8px;color:#ffaa00;font-size:0.85em">Your account is pending admin approval.</div>',
+            "invalid": '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(255,51,85,0.08);border:1px solid rgba(255,51,85,0.2);border-radius:8px;color:#ff3355;font-size:0.85em">Invalid email or password.</div>',
+            "empty": '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(255,51,85,0.08);border:1px solid rgba(255,51,85,0.2);border-radius:8px;color:#ff3355;font-size:0.85em">Email and password are required.</div>',
+        }
+        error_msg = error_messages.get(error, "")
+        if not error_msg and signup_ok == "ok":
+            error_msg = '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(0,255,65,0.08);border:1px solid rgba(0,255,65,0.2);border-radius:8px;color:#00ff41;font-size:0.85em">Account created! Please wait for admin approval, then sign in.</div>'
         html = (
-            _LOGIN_HTML.replace("{pending_msg}", pending_msg)
+            _LOGIN_HTML.replace("{pending_msg}", error_msg)
             if _LOGIN_HTML
             else "LOGIN_HTML not loaded"
         )
@@ -620,7 +639,20 @@ def create_fastapi_app(config: AppConfig) -> FastAPI:
     async def signup_get(request: Request):
         if request.session.get("user_id"):
             return RedirectResponse(url="/", status_code=302)
-        return HTMLResponse(_SIGNUP_HTML if _SIGNUP_HTML else "SIGNUP_HTML not loaded")
+        error = request.query_params.get("error", "")
+        error_messages = {
+            "empty": '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(255,51,85,0.08);border:1px solid rgba(255,51,85,0.2);border-radius:8px;color:#ff3355;font-size:0.85em">All fields are required.</div>',
+            "short_password": '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(255,51,85,0.08);border:1px solid rgba(255,51,85,0.2);border-radius:8px;color:#ff3355;font-size:0.85em">Password must be at least 6 characters.</div>',
+            "email_taken": '<div style="text-align:center;margin-bottom:16px;padding:12px;background:rgba(255,51,85,0.08);border:1px solid rgba(255,51,85,0.2);border-radius:8px;color:#ff3355;font-size:0.85em">An account with that email already exists.</div>',
+        }
+        error_msg = error_messages.get(error, "")
+        html = _SIGNUP_HTML if _SIGNUP_HTML else "SIGNUP_HTML not loaded"
+        if error_msg:
+            html = html.replace(
+                '<form id="signupForm"',
+                error_msg + '<form id="signupForm"',
+            )
+        return HTMLResponse(html)
 
     @app.post("/signup")
     async def signup_post(request: Request):

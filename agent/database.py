@@ -354,7 +354,45 @@ else:
 
 def init_db():
     """Initialize database schema — creates tables if they don't exist."""
+    logger = __import__("logging").getLogger(__name__)
+    if _use_postgres:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(DATABASE_URL)
+        safe_host = parsed.hostname or "unknown"
+        safe_db = (parsed.path or "/").lstrip("/") or "unknown"
+        logger.info(
+            "Using PostgreSQL: host=%s db=%s (DATABASE_URL is set)",
+            safe_host,
+            safe_db,
+        )
+    else:
+        logger.info("Using SQLite: path=%s (DATABASE_URL not set)", DB_PATH)
     _init_schema()
+
+
+def get_db_type() -> str:
+    """Return the current database type: 'postgresql' or 'sqlite'."""
+    return "postgresql" if _use_postgres else "sqlite"
+
+
+def get_db_connection_info() -> dict:
+    """Return safe connection info for diagnostic endpoints."""
+    if _use_postgres:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(DATABASE_URL)
+        return {
+            "type": "postgresql",
+            "host": parsed.hostname or "unknown",
+            "port": parsed.port or 5432,
+            "database": (parsed.path or "/").lstrip("/") or "unknown",
+        }
+    else:
+        return {
+            "type": "sqlite",
+            "path": DB_PATH,
+        }
 
 
 # ── SQLite Migration Helper (SQLite only) ─────────────────────────────────────
